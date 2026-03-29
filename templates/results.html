@@ -4,36 +4,30 @@
 <div class="card shadow-sm border-0 rounded-4">
     <div class="card-body p-4">
         <h2 class="fw-bold mb-3">Election Results</h2>
-        <p class="text-muted">Election ID: {{ election['election_code'] }}</p>
 
-        {% if not verification['valid'] and not allow_tampered_results %}
-            <div class="alert alert-danger">
-                <strong>Warning:</strong> Blockchain tampering detected. Results are blocked until an admin reviews the chain.
-            </div>
-            {% if session.get('admin_id') %}
-                <a href="{{ url_for('results', proceed=1) }}" class="btn btn-warning">Proceed Anyway as Admin</a>
-            {% endif %}
+        {% if election %}
+            <p class="text-muted">Election ID: {{ election['election_code'] }}</p>
         {% else %}
-            {% if allow_tampered_results %}
-                <div class="alert alert-warning">
-                    Results are being shown even though the blockchain has been tampered with.
-                </div>
-            {% endif %}
+            <p class="text-muted">No election details are available.</p>
+        {% endif %}
 
-            {% if result_rows %}
+        {% if message %}
+            <div class="alert alert-warning">{{ message }}</div>
+        {% else %}
+            {% if results %}
                 <div class="table-responsive">
                     <table class="table table-striped align-middle">
                         <thead>
                             <tr>
                                 <th>Candidate</th>
-                                <th>Total Votes</th>
+                                <th>Votes</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for candidate_name, vote_count in result_rows.items() %}
+                            {% for row in results %}
                                 <tr>
-                                    <td>{{ candidate_name }}</td>
-                                    <td>{{ vote_count }}</td>
+                                    <td>{{ row['candidate_name'] }}</td>
+                                    <td>{{ row['votes'] }}</td>
                                 </tr>
                             {% endfor %}
                         </tbody>
@@ -42,20 +36,6 @@
             {% else %}
                 <div class="alert alert-info">No votes were found for this election.</div>
             {% endif %}
-        {% endif %}
-
-        {% if verification['mismatches'] %}
-            <hr>
-            <h4 class="fw-bold">Tampering Details</h4>
-            <ul class="list-group">
-                {% for mismatch in verification['mismatches'] %}
-                    <li class="list-group-item">
-                        <strong>Block {{ mismatch['block_number'] }}:</strong> {{ mismatch['issue'] }}<br>
-                        <small>Expected: {{ mismatch['expected'] }}</small><br>
-                        <small>Found: {{ mismatch['found'] }}</small>
-                    </li>
-                {% endfor %}
-            </ul>
         {% endif %}
     </div>
 </div>

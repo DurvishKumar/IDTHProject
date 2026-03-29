@@ -564,7 +564,13 @@ def store_register_feedback(form_data=None, error=None):
 
 @app.route("/")
 def home():
-    return render_template("home.html")
+    election = get_latest_election()
+    results_available = bool(election and get_election_status(election) == "ended")
+    return render_template(
+        "home.html",
+        election=election,
+        results_available=results_available,
+    )
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -813,8 +819,20 @@ def vote():
 
 @app.route("/results")
 def results():
-    flash("Results are available only from the admin results page.", "warning")
-    return redirect(url_for("home"))
+    election = get_latest_election()
+    if not election:
+        return render_template("results.html", election=None, results=None, message="No election configured")
+
+    if get_election_status(election) != "ended":
+        return render_template(
+            "results.html",
+            election=election,
+            results=None,
+            message="Results not available yet",
+        )
+
+    result_rows = persist_results_for_election(election)
+    return render_template("results.html", election=election, results=result_rows, message=None)
 
 
 @app.route("/admin/results")

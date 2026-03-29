@@ -13,6 +13,11 @@
                 <a href="{{ url_for('admin_login') }}" class="btn btn-primary btn-lg">Admin Login</a>
                 <a href="{{ url_for('voter_login') }}" class="btn btn-success btn-lg">Voter Login</a>
                 <a href="{{ url_for('register') }}" class="btn btn-outline-dark btn-lg">Voter Registration</a>
+                {% if results_available %}
+                    <a href="{{ url_for('results') }}" class="btn btn-dark btn-lg">View Results</a>
+                {% else %}
+                    <button class="btn btn-secondary btn-lg" type="button" disabled>Results Not Available</button>
+                {% endif %}
             </div>
         </div>
         <div class="col-lg-5">
