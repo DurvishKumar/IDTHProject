@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Blockchain History{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1">Blockchain History</h2>
+        <p class="text-muted mb-0">Permanent blockchain records grouped by election ID.</p>
+    </div>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+</div>
+
+{% for election_id, blocks in grouped_history.items() %}
+    <div class="card shadow-sm border-0 rounded-4 mb-4">
+        <div class="card-body">
+            <h4 class="fw-bold mb-3">Election ID: {{ election_id }}</h4>
+            <div class="table-responsive">
+                <table class="table table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Block</th>
+                            <th>Voter ID</th>
+                            <th>Candidate</th>
+                            <th>Hash</th>
+                            <th>Previous Hash</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for block in blocks %}
+                            <tr>
+                                <td>{{ block['block_index'] }}</td>
+                                <td>{{ block['voter_id'] }}</td>
+                                <td>{{ block['candidate_name'] }}</td>
+                                <td class="small">{{ block['hash'] }}</td>
+                                <td class="small">{{ block['previous_hash'] }}</td>
+                                <td>
+                                    {% if block['is_valid'] %}
+                                        <span class="badge text-bg-success">Valid</span>
+                                    {% else %}
+                                        <span class="badge text-bg-danger">Invalid</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+{% else %}
+    <div class="alert alert-info">No blockchain history is available yet.</div>
+{% endfor %}
+{% endblock %}

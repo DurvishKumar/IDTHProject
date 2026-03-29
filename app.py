@@ -208,6 +208,25 @@ def init_db():
 
     execute_query(
         """
+        CREATE TABLE IF NOT EXISTS results_history (
+            id SERIAL PRIMARY KEY,
+            election_id TEXT,
+            candidate_name TEXT,
+            votes INT,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    execute_query(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_results_history_election_candidate
+        ON results_history (election_id, candidate_name)
+        """
+    )
+
+    execute_query(
+        """
         CREATE TABLE IF NOT EXISTS blockchain (
             id SERIAL PRIMARY KEY,
             election_id TEXT NOT NULL,
@@ -231,6 +250,13 @@ def init_db():
             election_id TEXT UNIQUE,
             tamper_action TEXT DEFAULT 'block'
         )
+        """
+    )
+
+    execute_query(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_settings_election_id
+        ON admin_settings (election_id)
         """
     )
 
@@ -334,6 +360,7 @@ def validate_blockchain(election_id):
     blocks = get_blockchain_rows(election_id)
     mismatches = []
     invalid_found = False
+    execute_query("UPDATE blockchain SET is_valid = TRUE WHERE election_id = %s", (election_id,))
 
     for position, block in enumerate(blocks):
         expected_hash = build_block_hash(
@@ -347,11 +374,11 @@ def validate_blockchain(election_id):
                 "previous_hash": block["previous_hash"],
             }
         )
-        is_valid = True
+        block_broken_here = False
 
         if block["hash"] != expected_hash:
             invalid_found = True
-            is_valid = False
+            block_broken_here = True
             mismatches.append(
                 {
                     "block_number": block["block_index"],
@@ -364,7 +391,7 @@ def validate_blockchain(election_id):
         if block["block_index"] == 0:
             if block["previous_hash"] != "0":
                 invalid_found = True
-                is_valid = False
+                block_broken_here = True
                 mismatches.append(
                     {
                         "block_number": block["block_index"],
@@ -377,7 +404,7 @@ def validate_blockchain(election_id):
             previous_block = blocks[position - 1]
             if previous_block["hash"] != block["previous_hash"]:
                 invalid_found = True
-                is_valid = False
+                block_broken_here = True
                 mismatches.append(
                     {
                         "block_number": block["block_index"],
@@ -387,7 +414,17 @@ def validate_blockchain(election_id):
                     }
                 )
 
-        execute_query("UPDATE blockchain SET is_valid = %s WHERE id = %s", (is_valid, block["id"]))
+        if invalid_found and not block_broken_here:
+            mismatches.append(
+                {
+                    "block_number": block["block_index"],
+                    "issue": "Invalid because an earlier block was tampered",
+                    "expected": "Valid blockchain chain",
+                    "found": "Earlier blockchain mismatch",
+                }
+            )
+
+        execute_query("UPDATE blockchain SET is_valid = %s WHERE id = %s", (not invalid_found, block["id"]))
 
     refreshed_blocks = get_blockchain_rows(election_id)
     return {"valid": not invalid_found, "mismatches": mismatches, "chain": refreshed_blocks}
@@ -537,12 +574,24 @@ def persist_results_for_election(election):
     return get_stored_results(election["election_code"])
 
 
+def store_results_history_once(election_id, result_rows):
+    for row in result_rows:
+        execute_query(
+            """
+            INSERT INTO results_history (election_id, candidate_name, votes)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (election_id, candidate_name)
+            DO NOTHING
+            """,
+            (election_id, row["candidate_name"], row["votes"]),
+        )
+
+
 def get_results_history():
     rows = execute_query(
         """
-        SELECT election_id, candidate_name, COUNT(*) AS votes, MAX(created_at) AS timestamp
-        FROM blockchain
-        GROUP BY election_id, candidate_name
+        SELECT election_id, candidate_name, votes, created_at AS timestamp
+        FROM results_history
         ORDER BY election_id DESC, candidate_name ASC
         """,
         fetchall=True,
@@ -572,6 +621,23 @@ def get_results_from_blockchain(election_id, valid_only=False):
         ORDER BY votes DESC, candidate_name ASC
     """
     return execute_query(query, (election_id,), fetchall=True)
+
+
+def get_blockchain_history():
+    rows = execute_query(
+        """
+        SELECT election_id, block_index, voter_id, candidate_name, hash, previous_hash, is_valid
+        FROM blockchain
+        ORDER BY election_id ASC, block_index ASC, id ASC
+        """,
+        fetchall=True,
+    )
+
+    grouped_history = OrderedDict()
+    for election_id, election_rows in groupby(rows, key=lambda row: row["election_id"]):
+        grouped_history[election_id] = list(election_rows)
+
+    return grouped_history
 
 
 def validate_password(password):
@@ -943,6 +1009,7 @@ def results():
         election_id,
         valid_only=not verification["valid"] and tamper_action == "partial",
     )
+    store_results_history_once(election_id, result_rows)
     return render_template(
         "results.html",
         election=election,
@@ -983,6 +1050,7 @@ def admin_results():
         election_id,
         valid_only=not verification["valid"] and tamper_action == "partial",
     )
+    store_results_history_once(election_id, result_rows)
     return render_template(
         "admin_results.html",
         election=election,
@@ -994,6 +1062,7 @@ def admin_results():
 
 
 @app.route("/admin/results/history")
+@app.route("/admin/results-history")
 @admin_required
 def admin_results_history():
     return render_template("admin_results_history.html", grouped_results=get_results_history())
@@ -1185,6 +1254,12 @@ def admin_blockchain():
 
     verification = validate_blockchain(election["election_code"])
     return render_template("admin_blockchain.html", verification=verification, election=election)
+
+
+@app.route("/admin/blockchain-history")
+@admin_required
+def admin_blockchain_history():
+    return render_template("admin_blockchain_history.html", grouped_history=get_blockchain_history())
 
 
 @app.route("/admin/blockchain/tamper", methods=["POST"])

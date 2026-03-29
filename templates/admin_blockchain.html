@@ -6,7 +6,10 @@
         <h2 class="fw-bold mb-1">Blockchain</h2>
         <p class="text-muted mb-0">View all stored blocks, hashes, and tampering status for this election.</p>
     </div>
-    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('admin_blockchain_history') }}" class="btn btn-warning">Blockchain History</a>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+    </div>
 </div>
 
 <p class="text-muted">Election ID: {{ election['election_code'] }}</p>

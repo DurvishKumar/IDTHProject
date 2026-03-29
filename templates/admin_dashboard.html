@@ -8,8 +8,10 @@
     </div>
     <div class="d-flex flex-wrap gap-2">
         <a href="{{ url_for('admin_results') }}" class="btn btn-outline-primary">View Results</a>
+        <a href="{{ url_for('admin_results_history') }}" class="btn btn-info">Result History</a>
         <a href="{{ url_for('admin_voters') }}" class="btn btn-outline-dark">Voters List</a>
         <a href="{{ url_for('admin_blockchain') }}" class="btn btn-outline-secondary">View Blockchain</a>
+        <a href="{{ url_for('admin_blockchain_history') }}" class="btn btn-warning">Blockchain History</a>
     </div>
 </div>
 
@@ -52,8 +54,8 @@
                     <div class="col-12">
                         <label class="form-label">Results Action After Tampering</label>
                         <select class="form-select" name="action">
-                            <option value="block" {% if tamper_action == 'block' %}selected{% endif %}>Block Results if Tampered</option>
-                            <option value="partial" {% if tamper_action == 'partial' %}selected{% endif %}>Show Only Valid Blocks</option>
+                            <option value="block" {% if tamper_action == 'block' %}selected{% endif %}>Block Results</option>
+                            <option value="partial" {% if tamper_action == 'partial' %}selected{% endif %}>Show Valid Blocks Only</option>
                         </select>
                     </div>
                     <div class="col-12">
