@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Admin Results{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1">Election Results</h2>
+        <p class="text-muted mb-0">Results are shown only after the election end time.</p>
+    </div>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+</div>
+
+<div class="card shadow-sm border-0 rounded-4">
+    <div class="card-body">
+        <p class="text-muted">Election ID: {{ election['election_code'] }}</p>
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Candidate</th>
+                        <th>Total Votes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for candidate_name, vote_count in result_rows.items() %}
+                        <tr>
+                            <td>{{ candidate_name }}</td>
+                            <td>{{ vote_count }}</td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="2" class="text-muted">No votes were found for this election.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

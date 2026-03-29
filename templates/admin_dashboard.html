@@ -4,9 +4,14 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h2 class="fw-bold mb-1">Admin Dashboard</h2>
-        <p class="text-muted mb-0">Manage elections, candidates, voters, blockchain integrity, and results.</p>
+        <p class="text-muted mb-0">Manage elections and candidates from one place.</p>
     </div>
-    <a href="{{ url_for('results') }}" class="btn btn-outline-primary">View Results Page</a>
+    <div class="d-flex flex-wrap gap-2">
+        <a href="{{ url_for('admin_results') }}" class="btn btn-outline-primary">View Results</a>
+        <a href="{{ url_for('admin_voters') }}" class="btn btn-outline-dark">Voters List</a>
+        <a href="{{ url_for('admin_blockchain') }}" class="btn btn-outline-secondary">View Blockchain</a>
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-danger">Logout</a>
+    </div>
 </div>
 
 <div class="row g-4">
@@ -95,135 +100,5 @@
         </div>
     </div>
 
-    <div class="col-lg-6">
-        <div class="card shadow-sm border-0 rounded-4 h-100">
-            <div class="card-body">
-                <h4 class="fw-bold mb-3">Blockchain</h4>
-                <div class="alert {% if verification['valid'] %}alert-success{% else %}alert-danger{% endif %}">
-                    {% if verification['valid'] %}
-                        Blockchain is valid and untampered.
-                    {% else %}
-                        Blockchain tampering detected in {{ verification['mismatches']|length }} place(s).
-                    {% endif %}
-                </div>
-
-                <form method="post" action="{{ url_for('simulate_tampering') }}" class="row g-3 mb-4">
-                    <div class="col-md-8">
-                        <label class="form-label">Tamper Block Number</label>
-                        <input type="number" min="1" class="form-control" name="block_index" placeholder="Example: 1">
-                    </div>
-                    <div class="col-md-4 d-grid">
-                        <label class="form-label invisible">Action</label>
-                        <button type="submit" class="btn btn-warning">Simulate</button>
-                    </div>
-                </form>
-
-                <div class="accordion" id="blockAccordion">
-                    {% for block in verification['chain'] %}
-                        <div class="accordion-item">
-                            <h2 class="accordion-header" id="heading{{ block['index'] }}">
-                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ block['index'] }}">
-                                    Block {{ block['index'] }}
-                                </button>
-                            </h2>
-                            <div id="collapse{{ block['index'] }}" class="accordion-collapse collapse" data-bs-parent="#blockAccordion">
-                                <div class="accordion-body">
-                                    <pre class="mb-0 small">{{ block | tojson(indent=2) }}</pre>
-                                </div>
-                            </div>
-                        </div>
-                    {% endfor %}
-                </div>
-
-                {% if verification['mismatches'] %}
-                    <hr>
-                    <h5 class="fw-bold">Mismatch Details</h5>
-                    <ul class="list-group">
-                        {% for mismatch in verification['mismatches'] %}
-                            <li class="list-group-item">
-                                <strong>Block {{ mismatch['block_number'] }}:</strong> {{ mismatch['issue'] }}
-                            </li>
-                        {% endfor %}
-                    </ul>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-6">
-        <div class="card shadow-sm border-0 rounded-4 h-100">
-            <div class="card-body">
-                <h4 class="fw-bold mb-3">Voter Management</h4>
-                <div class="table-responsive">
-                    <table class="table table-striped align-middle">
-                        <thead>
-                            <tr>
-                                <th>Voter ID</th>
-                                <th>Name</th>
-                                <th>Constituency</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for voter in voters %}
-                                <tr>
-                                    <td class="small">{{ voter['voter_id'] }}</td>
-                                    <td>{{ voter['name'] }}</td>
-                                    <td>{{ voter['constituency'] }}</td>
-                                    <td>
-                                        {% if voter['has_voted'] %}
-                                            <span class="badge text-bg-success">Voted</span>
-                                        {% else %}
-                                            <span class="badge text-bg-secondary">Pending</span>
-                                        {% endif %}
-                                    </td>
-                                </tr>
-                            {% else %}
-                                <tr>
-                                    <td colspan="4" class="text-muted">No voters registered yet.</td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-12">
-        <div class="card shadow-sm border-0 rounded-4">
-            <div class="card-body">
-                <h4 class="fw-bold mb-3">Result Logic Preview</h4>
-                {% if verification['valid'] %}
-                    <div class="alert alert-success">Chain is valid, so results can be trusted.</div>
-                {% else %}
-                    <div class="alert alert-warning">Chain is tampered, so the results page will warn the admin before showing results.</div>
-                {% endif %}
-
-                <div class="table-responsive">
-                    <table class="table table-bordered align-middle">
-                        <thead>
-                            <tr>
-                                <th>Candidate</th>
-                                <th>Votes</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for candidate_name, vote_count in results_data.items() %}
-                                <tr>
-                                    <td>{{ candidate_name }}</td>
-                                    <td>{{ vote_count }}</td>
-                                </tr>
-                            {% else %}
-                                <tr>
-                                    <td colspan="2" class="text-muted">No votes recorded yet.</td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
 </div>
 {% endblock %}

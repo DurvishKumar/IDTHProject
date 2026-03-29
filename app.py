@@ -9,6 +9,7 @@ from datetime import date, datetime
 from functools import wraps
 from hashlib import sha256
 
+import pytz
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
 
@@ -17,10 +18,19 @@ DEFAULT_DATABASE_PATH = os.path.join(BASE_DIR, "database.db")
 DATABASE_PATH = os.environ.get("DATABASE_PATH", DEFAULT_DATABASE_PATH)
 BLOCKCHAIN_PATH = os.environ.get("BLOCKCHAIN_PATH", os.path.join(BASE_DIR, "blockchain.json"))
 DATE_TIME_FORMAT = "%Y-%m-%dT%H:%M"
+IST = pytz.timezone("Asia/Kolkata")
 
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key-before-production")
+
+
+@app.after_request
+def add_header(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def resolve_database_path():
@@ -150,7 +160,7 @@ def ensure_blockchain():
 
     genesis_block = {
         "index": 0,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": get_current_ist_time().isoformat(),
         "vote_data": {"message": "Genesis Block"},
         "previous_hash": "0",
     }
@@ -177,7 +187,7 @@ def create_block(vote_data):
     previous_block = chain[-1]
     new_block = {
         "index": len(chain),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": get_current_ist_time().isoformat(),
         "vote_data": vote_data,
         "previous_hash": previous_block["current_hash"],
     }
@@ -276,14 +286,19 @@ def get_latest_election():
 
 
 def parse_datetime(value):
-    return datetime.strptime(value, DATE_TIME_FORMAT)
+    naive_datetime = datetime.strptime(value, DATE_TIME_FORMAT)
+    return IST.localize(naive_datetime)
+
+
+def get_current_ist_time():
+    return datetime.now(IST)
 
 
 def get_election_status(election):
     if not election:
         return "not_configured"
 
-    now = datetime.now()
+    now = get_current_ist_time()
     start_time = parse_datetime(election["start_time"])
     end_time = parse_datetime(election["end_time"])
 
@@ -497,7 +512,7 @@ def register():
                 address,
                 constituency,
                 hash_text(password),
-                datetime.now().isoformat(),
+                get_current_ist_time().isoformat(),
             ),
         )
         connection.commit()
@@ -660,6 +675,22 @@ def results():
     )
 
 
+@app.route("/admin/results")
+@admin_required
+def admin_results():
+    election = get_latest_election()
+    if not election:
+        flash("No election is configured yet.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    if get_election_status(election) != "ended":
+        flash("Results not available yet", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    result_rows = calculate_results(election["id"])
+    return render_template("admin_results.html", election=election, result_rows=result_rows)
+
+
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
@@ -691,20 +722,10 @@ def admin_dashboard():
     election = get_latest_election()
     candidates = get_candidates_for_election(election["id"]) if election else []
 
-    connection = get_db_connection()
-    voters = connection.execute("SELECT * FROM voters ORDER BY id DESC").fetchall()
-    connection.close()
-
-    verification = verify_chain()
-    results_data = calculate_results(election["id"]) if election else {}
-
     return render_template(
         "admin_dashboard.html",
         election=election,
         candidates=candidates,
-        voters=voters,
-        verification=verification,
-        results_data=results_data,
     )
 
 
@@ -737,7 +758,7 @@ def create_election():
             INSERT INTO elections (election_code, start_time, end_time, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (election_code, start_time, end_time, datetime.now().isoformat()),
+            (election_code, start_time, end_time, get_current_ist_time().isoformat()),
         )
         connection.commit()
         flash("Election configured successfully.", "success")
@@ -770,7 +791,7 @@ def add_candidate():
         INSERT INTO candidates (election_id, candidate_name, party_name, created_at)
         VALUES (?, ?, ?, ?)
         """,
-        (election["id"], candidate_name, party_name, datetime.now().isoformat()),
+        (election["id"], candidate_name, party_name, get_current_ist_time().isoformat()),
     )
     connection.commit()
     connection.close()
@@ -791,17 +812,51 @@ def remove_candidate(candidate_id):
     return redirect(url_for("admin_dashboard"))
 
 
+@app.route("/admin/voters")
+@admin_required
+def admin_voters():
+    connection = get_db_connection()
+    voters = connection.execute(
+        """
+        SELECT voter_id, name, father_name, address, constituency
+        FROM voters
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    connection.close()
+    return render_template("admin_voters.html", voters=voters)
+
+
+@app.route("/admin/delete_voter/<voter_id>", methods=["POST"])
+@admin_required
+def delete_voter(voter_id):
+    connection = get_db_connection()
+    connection.execute("DELETE FROM voters WHERE voter_id = ?", (voter_id,))
+    connection.commit()
+    connection.close()
+
+    flash("Voter deleted successfully.", "success")
+    return redirect(url_for("admin_voters"))
+
+
+@app.route("/admin/blockchain")
+@admin_required
+def admin_blockchain():
+    verification = verify_chain()
+    return render_template("admin_blockchain.html", verification=verification)
+
+
 @app.route("/admin/blockchain/tamper", methods=["POST"])
 @admin_required
 def simulate_tampering():
     block_index = request.form.get("block_index", "").strip()
     if not block_index.isdigit():
         flash("Enter a valid block number for tampering simulation.", "danger")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_blockchain"))
 
     success, message = tamper_block(int(block_index))
     flash(message, "warning" if success else "danger")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_blockchain"))
 
 
 @app.route("/admin/logout")

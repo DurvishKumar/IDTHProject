@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Blockchain View{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1">Blockchain</h2>
+        <p class="text-muted mb-0">View all blocks, hashes, and tampering status from the JSON ledger.</p>
+    </div>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+</div>
+
+<div class="alert {% if verification['valid'] %}alert-success{% else %}alert-danger{% endif %}">
+    {% if verification['valid'] %}
+        Blockchain is valid and untampered.
+    {% else %}
+        Blockchain tampering detected in {{ verification['mismatches']|length }} place(s).
+    {% endif %}
+</div>
+
+<div class="card shadow-sm border-0 rounded-4 mb-4">
+    <div class="card-body">
+        <h4 class="fw-bold mb-3">Tamper Simulation</h4>
+        <form method="post" action="{{ url_for('simulate_tampering') }}" class="row g-3">
+            <div class="col-md-8">
+                <label class="form-label">Block Number</label>
+                <input type="number" min="1" class="form-control" name="block_index" placeholder="Example: 1">
+            </div>
+            <div class="col-md-4 d-grid">
+                <label class="form-label invisible">Action</label>
+                <button type="submit" class="btn btn-warning">Simulate Tampering</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if verification['mismatches'] %}
+    <div class="card shadow-sm border-0 rounded-4 mb-4">
+        <div class="card-body">
+            <h4 class="fw-bold mb-3">Mismatch Details</h4>
+            <ul class="list-group">
+                {% for mismatch in verification['mismatches'] %}
+                    <li class="list-group-item">
+                        <strong>Block {{ mismatch['block_number'] }}:</strong> {{ mismatch['issue'] }}<br>
+                        <small>Expected: {{ mismatch['expected'] }}</small><br>
+                        <small>Found: {{ mismatch['found'] }}</small>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+{% endif %}
+
+<div class="row g-4">
+    {% for block in verification['chain'] %}
+        <div class="col-12">
+            <div class="card shadow-sm border-0 rounded-4">
+                <div class="card-body">
+                    <h4 class="fw-bold">Block {{ block['index'] }}</h4>
+                    <p class="mb-2"><strong>Vote:</strong> {{ block['vote_data'] }}</p>
+                    <p class="mb-2"><strong>Hash:</strong> <span class="small">{{ block['current_hash'] }}</span></p>
+                    <p class="mb-0"><strong>Previous Hash:</strong> <span class="small">{{ block['previous_hash'] }}</span></p>
+                </div>
+            </div>
+        </div>
+    {% endfor %}
+</div>
+{% endblock %}

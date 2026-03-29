@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Voters List{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1">Voters List</h2>
+        <p class="text-muted mb-0">View full voter details and manage voter records.</p>
+    </div>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+</div>
+
+<div class="card shadow-sm border-0 rounded-4">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped align-middle">
+                <thead>
+                    <tr>
+                        <th>Voter ID</th>
+                        <th>Name</th>
+                        <th>Father Name</th>
+                        <th>Address</th>
+                        <th>Constituency</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for voter in voters %}
+                        <tr>
+                            <td class="small">{{ voter['voter_id'] }}</td>
+                            <td>{{ voter['name'] }}</td>
+                            <td>{{ voter['father_name'] }}</td>
+                            <td>{{ voter['address'] }}</td>
+                            <td>{{ voter['constituency'] }}</td>
+                            <td class="text-end">
+                                <form method="post" action="{{ url_for('delete_voter', voter_id=voter['voter_id']) }}" onsubmit="return confirm('Are you sure you want to delete this voter?');">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete Voter</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="6" class="text-muted">No voters found.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
