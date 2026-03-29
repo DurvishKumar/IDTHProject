@@ -3,6 +3,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const uppercaseInputs = document.querySelectorAll(".js-uppercase");
     const lowercaseInputs = document.querySelectorAll(".js-lowercase");
     const passwordToggles = document.querySelectorAll(".js-password-toggle");
+    const otpMeta = document.getElementById("otpMeta");
+    const resendOtpButton = document.getElementById("resendOtpButton");
+    const resendOtpMessage = document.getElementById("resendOtpMessage");
+    const otpExpiryMessage = document.getElementById("otpExpiryMessage");
 
     if (voteForm) {
         voteForm.addEventListener("submit", (event) => {
@@ -37,4 +41,45 @@ document.addEventListener("DOMContentLoaded", () => {
             button.textContent = isPassword ? "Hide" : "Show";
         });
     });
+
+    if (otpMeta) {
+        let resendWait = Number(otpMeta.dataset.resendWait || 0);
+        let expirySeconds = Number(otpMeta.dataset.expirySeconds || 0);
+
+        const updateOtpUi = () => {
+            if (resendOtpButton) {
+                resendOtpButton.disabled = resendWait > 0;
+            }
+
+            if (resendOtpMessage) {
+                resendOtpMessage.textContent = resendWait > 0
+                    ? `You can resend OTP in ${resendWait} seconds.`
+                    : "You can request a new OTP now.";
+            }
+
+            if (otpExpiryMessage) {
+                otpExpiryMessage.textContent = expirySeconds > 0
+                    ? `OTP expires in ${expirySeconds} seconds.`
+                    : "OTP expired. Please request a new OTP.";
+            }
+        };
+
+        updateOtpUi();
+
+        if (resendWait > 0 || expirySeconds > 0) {
+            const timer = window.setInterval(() => {
+                if (resendWait > 0) {
+                    resendWait -= 1;
+                }
+                if (expirySeconds > 0) {
+                    expirySeconds -= 1;
+                }
+                updateOtpUi();
+
+                if (resendWait <= 0 && expirySeconds <= 0) {
+                    window.clearInterval(timer);
+                }
+            }, 1000);
+        }
+    }
 });

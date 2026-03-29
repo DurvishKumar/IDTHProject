@@ -6,12 +6,38 @@ import sqlite3
 import tempfile
 import uuid
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 from hashlib import sha256
+from urllib import parse, request as urllib_request
 
 import pytz
 from flask import Flask, flash, redirect, render_template, request, session, url_for
+
+try:
+    import requests
+except ImportError:
+    class _FallbackResponse:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise ValueError(f"HTTP {self.status_code}")
+
+        def json(self):
+            return json.loads(self.text)
+
+    class _RequestsFallback:
+        @staticmethod
+        def post(url, data=None, headers=None, timeout=15):
+            encoded_data = parse.urlencode(data or {}).encode("utf-8")
+            request_object = urllib_request.Request(url, data=encoded_data, headers=headers or {}, method="POST")
+            with urllib_request.urlopen(request_object, timeout=timeout) as response:
+                return _FallbackResponse(response.status, response.read().decode("utf-8"))
+
+    requests = _RequestsFallback()
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -484,12 +510,23 @@ def build_registration_form_data(source=None):
 
 
 def render_register_form(form_data=None, error=None, info=None, otp_sent=False):
+    otp_time_value = session.get("otp_time")
+    resend_wait_seconds = 0
+    expiry_remaining_seconds = 0
+
+    if otp_time_value:
+        otp_time = datetime.fromisoformat(otp_time_value)
+        resend_wait_seconds = max(0, int((otp_time + timedelta(minutes=1) - datetime.now()).total_seconds()))
+        expiry_remaining_seconds = max(0, int((otp_time + timedelta(minutes=2) - datetime.now()).total_seconds()))
+
     return render_template(
         "register.html",
         form_data=build_registration_form_data(form_data),
         error=error,
         info=info,
         otp_sent=otp_sent,
+        resend_wait_seconds=resend_wait_seconds,
+        expiry_remaining_seconds=expiry_remaining_seconds,
     )
 
 
@@ -507,6 +544,31 @@ def store_register_feedback(form_data=None, error=None, info=None, otp_sent=Fals
     session["registration_error"] = error
     session["registration_info"] = info
     session["registration_otp_sent"] = otp_sent
+
+
+def send_otp(phone, otp):
+    api_key = os.environ.get("FAST2SMS_API_KEY")
+    if not api_key:
+        return False, "FAST2SMS_API_KEY is not configured. OTP generated in demo mode."
+
+    url = "https://www.fast2sms.com/dev/bulkV2"
+    payload = {
+        "variables_values": otp,
+        "route": "otp",
+        "numbers": phone,
+    }
+    headers = {
+        "authorization": api_key,
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
+    response = requests.post(url, data=payload, headers=headers, timeout=15)
+    response.raise_for_status()
+    response_data = response.json()
+    if not response_data.get("return"):
+        raise ValueError("Fast2SMS rejected the OTP request.")
+
+    return True, "OTP sent successfully."
 
 
 @app.route("/")
@@ -596,23 +658,49 @@ def register():
             return redirect(url_for("register"))
         connection.close()
 
-        if action == "send_otp":
+        if action in {"send_otp", "resend_otp"}:
+            otp_time_value = session.get("otp_time")
+            if action == "resend_otp" and otp_time_value:
+                otp_time = datetime.fromisoformat(otp_time_value)
+                if datetime.now() < otp_time + timedelta(minutes=1):
+                    store_register_feedback(form_data, error="Please wait before requesting new OTP", otp_sent=True)
+                    return redirect(url_for("register"))
+
             generated_otp = str(random.randint(100000, 999999))
-            session["registration_otp"] = generated_otp
-            session["registration_phone"] = phone_number
-            store_register_feedback(
-                form_data,
-                info=f"Simulated OTP for testing: {generated_otp}",
-                otp_sent=True,
-            )
+            session["otp"] = generated_otp
+            session["otp_time"] = datetime.now().isoformat()
+            session["otp_phone"] = phone_number
+
+            info_message = None
+            try:
+                sent, message = send_otp(phone_number, generated_otp)
+                if sent and "demo mode" not in message.lower():
+                    info_message = "OTP sent successfully to your phone number."
+                else:
+                    info_message = f"{message} Demo OTP: {generated_otp}"
+            except Exception:
+                info_message = f"Unable to send SMS right now. Demo OTP: {generated_otp}"
+
+            store_register_feedback(form_data, info=info_message, otp_sent=True)
             return redirect(url_for("register"))
 
-        session_form_data = session.get("registration_form_data")
-        if not session_form_data or session.get("registration_phone") != phone_number:
+        if "otp" not in session:
             store_register_feedback(form_data, error="Please generate OTP first.")
             return redirect(url_for("register"))
 
-        if otp != session.get("registration_otp"):
+        if session.get("otp_phone") != phone_number:
+            store_register_feedback(form_data, error="OTP is linked to a different phone number.", otp_sent=True)
+            return redirect(url_for("register"))
+
+        otp_time = datetime.fromisoformat(session["otp_time"])
+        if datetime.now() > otp_time + timedelta(minutes=2):
+            session.pop("otp", None)
+            session.pop("otp_time", None)
+            session.pop("otp_phone", None)
+            store_register_feedback(form_data, error="OTP expired", otp_sent=False)
+            return redirect(url_for("register"))
+
+        if otp != session.get("otp"):
             store_register_feedback(
                 form_data,
                 error="Invalid OTP. Please enter the 6-digit OTP sent to your phone.",
@@ -651,8 +739,9 @@ def register():
         )
         connection.commit()
         connection.close()
-        session.pop("registration_otp", None)
-        session.pop("registration_phone", None)
+        session.pop("otp", None)
+        session.pop("otp_time", None)
+        session.pop("otp_phone", None)
         session.pop("registration_form_data", None)
 
         flash(f"Registration successful. Your voter ID is {voter_id}", "success")
