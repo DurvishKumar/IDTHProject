@@ -1,7 +1,7 @@
 import json
 import os
 import re
-import uuid
+import string
 from collections import OrderedDict
 from datetime import date, datetime
 from functools import wraps
@@ -72,6 +72,10 @@ def hash_text(value):
     return sha256(value.encode("utf-8")).hexdigest()
 
 
+def hash_aadhaar(aadhaar):
+    return hash_text(aadhaar)
+
+
 def init_db():
     """Create all PostgreSQL tables and seed a default admin account."""
     connection = get_db_connection()
@@ -96,7 +100,7 @@ def init_db():
             constituency TEXT,
             phone TEXT,
             email TEXT,
-            hashed_aadhaar TEXT,
+            hashed_aadhaar TEXT UNIQUE,
             hashed_password TEXT,
             gender TEXT,
             name TEXT,
@@ -107,6 +111,22 @@ def init_db():
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             phone_number TEXT
         )
+        """
+    )
+
+    connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'unique_aadhaar'
+            ) THEN
+                ALTER TABLE voters
+                ADD CONSTRAINT unique_aadhaar UNIQUE (hashed_aadhaar);
+            END IF;
+        END $$;
         """
     )
 
@@ -457,19 +477,19 @@ def calculate_age(dob_text):
     return years
 
 
-def generate_unique_voter_id():
-    """Generate a UUID voter ID that will not be reused after deletions."""
-    while True:
-        voter_id = str(uuid.uuid4())
-        connection = get_db_connection()
-        existing_voter = connection.execute(
-            "SELECT voter_id FROM voters WHERE voter_id = %s",
-            (voter_id,),
-        ).fetchone()
-        connection.close()
+def generate_voter_id_from_aadhaar(aadhaar):
+    hash_value = hash_aadhaar(aadhaar)
+    allowed_chars = string.ascii_uppercase + string.digits
 
-        if not existing_voter:
-            return voter_id
+    voter_id = ""
+    for ch in hash_value:
+        index = int(ch, 16) % len(allowed_chars)
+        voter_id += allowed_chars[index]
+
+        if len(voter_id) == 10:
+            break
+
+    return voter_id
 
 
 def build_registration_form_data(source=None):
@@ -585,8 +605,18 @@ def register():
             store_register_feedback(form_data, error="Password and confirm password do not match.")
             return redirect(url_for("register"))
 
-        hashed_aadhaar = hash_text(aadhaar)
-        voter_id = generate_unique_voter_id()
+        hashed_aadhaar = hash_aadhaar(aadhaar)
+        connection = get_db_connection()
+        existing_voter = connection.execute(
+            "SELECT voter_id FROM voters WHERE hashed_aadhaar = %s",
+            (hashed_aadhaar,),
+        ).fetchone()
+        connection.close()
+        if existing_voter:
+            store_register_feedback(form_data, error="User already registered.")
+            return redirect(url_for("register"))
+
+        voter_id = generate_voter_id_from_aadhaar(aadhaar)
         hashed_password = hash_text(password)
         connection = get_db_connection()
         connection.execute(

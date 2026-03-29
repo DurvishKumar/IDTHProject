@@ -1,0 +1,17 @@
+{
+    "sqltools.connections": [
+        {
+            "pgOptions": {
+                "ssl": {
+                    "rejectUnauthorized": false
+                }
+            },
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "driver": "PostgreSQL",
+            "connectString": "postgresql://voting_db_3wd5_user:1s5mUNJv3xeinZPoD6jhiMkHGijOieUK@dpg-d74kl54r85hc73frkti0-a.ohio-postgres.render.com:5432/voting_db_3wd5",
+            "name": "voting-db"
+        }
+    ]
+}
