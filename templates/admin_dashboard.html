@@ -45,6 +45,21 @@
                 {% else %}
                     <p class="text-muted mb-0">No election configured.</p>
                 {% endif %}
+
+                <hr>
+                <h5 class="fw-bold">Tampering Behavior</h5>
+                <form method="post" action="{{ url_for('set_tamper_action') }}" class="row g-3">
+                    <div class="col-12">
+                        <label class="form-label">Results Action After Tampering</label>
+                        <select class="form-select" name="action">
+                            <option value="block" {% if tamper_action == 'block' %}selected{% endif %}>Block Results if Tampered</option>
+                            <option value="partial" {% if tamper_action == 'partial' %}selected{% endif %}>Show Only Valid Blocks</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-outline-primary">Save Tamper Setting</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

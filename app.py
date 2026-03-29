@@ -7,6 +7,7 @@ from collections import OrderedDict
 from datetime import date, datetime
 from functools import wraps
 from hashlib import sha256
+from itertools import groupby
 
 import pytz
 from flask import Flask, flash, g, redirect, render_template, request, session, url_for
@@ -20,7 +21,6 @@ except ImportError:
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-BLOCKCHAIN_PATH = os.environ.get("BLOCKCHAIN_PATH", os.path.join(BASE_DIR, "blockchain.json"))
 DATABASE_URL = os.environ.get("DATABASE_URL")
 DATE_TIME_FORMAT = "%Y-%m-%dT%H:%M"
 IST = pytz.timezone("Asia/Kolkata")
@@ -206,6 +206,34 @@ def init_db():
         """
     )
 
+    execute_query(
+        """
+        CREATE TABLE IF NOT EXISTS blockchain (
+            id SERIAL PRIMARY KEY,
+            election_id TEXT NOT NULL,
+            block_index INT NOT NULL,
+            voter_id TEXT,
+            candidate_id INT,
+            candidate_name TEXT,
+            party_name TEXT,
+            hash TEXT NOT NULL,
+            previous_hash TEXT NOT NULL,
+            is_valid BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    execute_query(
+        """
+        CREATE TABLE IF NOT EXISTS admin_settings (
+            id SERIAL PRIMARY KEY,
+            election_id TEXT UNIQUE,
+            tamper_action TEXT DEFAULT 'block'
+        )
+        """
+    )
+
     admin = execute_query(
         "SELECT id FROM admins WHERE admin_id = %s",
         ("admin",),
@@ -218,117 +246,187 @@ def init_db():
         )
 
 
-def hash_block(block):
-    """Hash the core contents of a block, excluding the block's own current hash."""
+def build_block_hash(block_payload):
     payload = {
-        "index": block["index"],
-        "timestamp": block["timestamp"],
-        "vote_data": block["vote_data"],
-        "previous_hash": block["previous_hash"],
+        "election_id": block_payload["election_id"],
+        "block_index": block_payload["block_index"],
+        "voter_id": block_payload["voter_id"],
+        "candidate_id": block_payload["candidate_id"],
+        "candidate_name": block_payload["candidate_name"],
+        "party_name": block_payload["party_name"],
+        "previous_hash": block_payload["previous_hash"],
     }
     return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def ensure_blockchain():
-    """Create the blockchain file with one genesis block on first run."""
-    if os.path.exists(BLOCKCHAIN_PATH):
-        return
-
-    genesis_block = {
-        "index": 0,
-        "timestamp": get_current_ist_time().isoformat(),
-        "vote_data": {"message": "Genesis Block"},
-        "previous_hash": "0",
-    }
-    genesis_block["current_hash"] = hash_block(genesis_block)
-
-    with open(BLOCKCHAIN_PATH, "w", encoding="utf-8") as blockchain_file:
-        json.dump([genesis_block], blockchain_file, indent=4)
+def get_current_election_id():
+    election = get_latest_election()
+    return election["election_code"] if election else None
 
 
-def load_chain():
-    ensure_blockchain()
-    with open(BLOCKCHAIN_PATH, "r", encoding="utf-8") as blockchain_file:
-        return json.load(blockchain_file)
-
-
-def save_chain(chain):
-    with open(BLOCKCHAIN_PATH, "w", encoding="utf-8") as blockchain_file:
-        json.dump(chain, blockchain_file, indent=4)
+def get_blockchain_rows(election_id):
+    return execute_query(
+        """
+        SELECT id, election_id, block_index, voter_id, candidate_id, candidate_name,
+               party_name, hash, previous_hash, is_valid, created_at
+        FROM blockchain
+        WHERE election_id = %s
+        ORDER BY block_index ASC, id ASC
+        """,
+        (election_id,),
+        fetchall=True,
+    )
 
 
 def create_block(vote_data):
-    """Append a new vote block to the JSON chain."""
-    chain = load_chain()
-    previous_block = chain[-1]
-    new_block = {
-        "index": len(chain),
-        "timestamp": get_current_ist_time().isoformat(),
-        "vote_data": vote_data,
-        "previous_hash": previous_block["current_hash"],
+    """Append a new vote block to the PostgreSQL blockchain table."""
+    election_id = vote_data["election_id"]
+    previous_block = execute_query(
+        """
+        SELECT block_index, hash
+        FROM blockchain
+        WHERE election_id = %s
+        ORDER BY block_index DESC, id DESC
+        LIMIT 1
+        """,
+        (election_id,),
+        fetchone=True,
+    )
+    block_index = (previous_block["block_index"] + 1) if previous_block else 0
+    previous_hash = previous_block["hash"] if previous_block else "0"
+    block_payload = {
+        "election_id": election_id,
+        "block_index": block_index,
+        "voter_id": vote_data.get("voter_id"),
+        "candidate_id": vote_data.get("candidate_id"),
+        "candidate_name": vote_data.get("candidate_name"),
+        "party_name": vote_data.get("party_name"),
+        "previous_hash": previous_hash,
     }
-    new_block["current_hash"] = hash_block(new_block)
-    chain.append(new_block)
-    save_chain(chain)
-    return new_block
+    current_hash = build_block_hash(block_payload)
+
+    execute_query(
+        """
+        INSERT INTO blockchain (
+            election_id, block_index, voter_id, candidate_id, candidate_name, party_name,
+            hash, previous_hash
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            election_id,
+            block_index,
+            block_payload["voter_id"],
+            block_payload["candidate_id"],
+            block_payload["candidate_name"],
+            block_payload["party_name"],
+            current_hash,
+            previous_hash,
+        ),
+    )
+
+    block_payload["hash"] = current_hash
+    block_payload["is_valid"] = True
+    return block_payload
 
 
-def verify_chain():
-    """
-    Check every block for two things:
-    1. The stored current hash still matches the block contents.
-    2. Each block still correctly links to the previous block.
-    """
-    chain = load_chain()
+def validate_blockchain(election_id):
+    blocks = get_blockchain_rows(election_id)
     mismatches = []
+    invalid_found = False
 
-    for index, block in enumerate(chain):
-        expected_hash = hash_block(block)
-        if block.get("current_hash") != expected_hash:
+    for position, block in enumerate(blocks):
+        expected_hash = build_block_hash(
+            {
+                "election_id": block["election_id"],
+                "block_index": block["block_index"],
+                "voter_id": block["voter_id"],
+                "candidate_id": block["candidate_id"],
+                "candidate_name": block["candidate_name"],
+                "party_name": block["party_name"],
+                "previous_hash": block["previous_hash"],
+            }
+        )
+        is_valid = True
+
+        if block["hash"] != expected_hash:
+            invalid_found = True
+            is_valid = False
             mismatches.append(
                 {
-                    "block_number": index,
+                    "block_number": block["block_index"],
                     "issue": "Current hash mismatch",
                     "expected": expected_hash,
-                    "found": block.get("current_hash"),
+                    "found": block["hash"],
                 }
             )
 
-        if index == 0:
-            if block.get("previous_hash") != "0":
+        if block["block_index"] == 0:
+            if block["previous_hash"] != "0":
+                invalid_found = True
+                is_valid = False
                 mismatches.append(
                     {
-                        "block_number": index,
+                        "block_number": block["block_index"],
                         "issue": "Genesis block previous hash mismatch",
                         "expected": "0",
-                        "found": block.get("previous_hash"),
+                        "found": block["previous_hash"],
                     }
                 )
-            continue
+        else:
+            previous_block = blocks[position - 1]
+            if previous_block["hash"] != block["previous_hash"]:
+                invalid_found = True
+                is_valid = False
+                mismatches.append(
+                    {
+                        "block_number": block["block_index"],
+                        "issue": "Previous hash link mismatch",
+                        "expected": previous_block["hash"],
+                        "found": block["previous_hash"],
+                    }
+                )
 
-        previous_block = chain[index - 1]
-        if block.get("previous_hash") != previous_block.get("current_hash"):
-            mismatches.append(
-                {
-                    "block_number": index,
-                    "issue": "Previous hash link mismatch",
-                    "expected": previous_block.get("current_hash"),
-                    "found": block.get("previous_hash"),
-                }
-            )
+        execute_query("UPDATE blockchain SET is_valid = %s WHERE id = %s", (is_valid, block["id"]))
 
-    return {"valid": len(mismatches) == 0, "mismatches": mismatches, "chain": chain}
+    refreshed_blocks = get_blockchain_rows(election_id)
+    return {"valid": not invalid_found, "mismatches": mismatches, "chain": refreshed_blocks}
 
 
-def tamper_block(block_index):
-    """Intentionally modify a non-genesis block to simulate tampering."""
-    chain = load_chain()
-    if block_index <= 0 or block_index >= len(chain):
-        return False, "Choose an existing non-genesis block number."
+def get_tamper_action(election_id):
+    setting = execute_query(
+        "SELECT tamper_action FROM admin_settings WHERE election_id = %s",
+        (election_id,),
+        fetchone=True,
+    )
+    return setting["tamper_action"] if setting else "block"
 
-    chain[block_index]["vote_data"]["candidate_name"] = "Tampered Candidate"
-    chain[block_index]["vote_data"]["tampered"] = True
-    save_chain(chain)
+
+def tamper_block(election_id, block_index):
+    """Intentionally modify a stored block to simulate tampering without fixing its hash."""
+    if block_index < 0:
+        return False, "Choose an existing block number."
+
+    block = execute_query(
+        """
+        SELECT id
+        FROM blockchain
+        WHERE election_id = %s AND block_index = %s
+        """,
+        (election_id, block_index),
+        fetchone=True,
+    )
+    if not block:
+        return False, "Choose an existing block number."
+
+    execute_query(
+        """
+        UPDATE blockchain
+        SET candidate_name = %s
+        WHERE id = %s
+        """,
+        ("Tampered Candidate", block["id"]),
+    )
     return True, f"Block {block_index} has been tampered with."
 
 
@@ -407,24 +505,28 @@ def get_all_candidates():
 
 
 def calculate_results(election_id):
-    """Count votes on the blockchain for one specific election."""
-    results = {}
-    for block in load_chain()[1:]:
-        vote_data = block.get("vote_data", {})
-        if vote_data.get("election_id") != election_id:
-            continue
-        candidate_name = vote_data.get("candidate_name", "Unknown Candidate")
-        results[candidate_name] = results.get(candidate_name, 0) + 1
-    return results
+    rows = execute_query(
+        """
+        SELECT candidate_name, COUNT(*) AS votes
+        FROM blockchain
+        WHERE election_id = %s
+        GROUP BY candidate_name
+        ORDER BY votes DESC, candidate_name ASC
+        """,
+        (election_id,),
+        fetchall=True,
+    )
+    return {row["candidate_name"]: row["votes"] for row in rows}
 
 
 def get_stored_results(election_id):
     return execute_query(
         """
-        SELECT candidate_name, votes, timestamp
-        FROM results
+        SELECT candidate_name, COUNT(*) AS votes
+        FROM blockchain
         WHERE election_id = %s
-        ORDER BY id ASC
+        GROUP BY candidate_name
+        ORDER BY votes DESC, candidate_name ASC
         """,
         (election_id,),
         fetchall=True,
@@ -432,50 +534,44 @@ def get_stored_results(election_id):
 
 
 def persist_results_for_election(election):
-    """
-    Persist results once per election after it ends.
-    Results are stored in SQLite and read from there afterwards.
-    """
-    election_id = election["election_code"]
-    existing_results = get_stored_results(election_id)
-    if existing_results:
-        return existing_results
-
-    candidate_rows = get_candidates_for_election(election_id)
-    blockchain_counts = calculate_results(election_id)
-
-    for candidate in candidate_rows:
-        candidate_name = candidate["candidate_name"]
-        execute_query(
-            """
-            INSERT INTO results (election_id, candidate_name, votes)
-            VALUES (%s, %s, %s)
-            """,
-            (election_id, candidate_name, blockchain_counts.get(candidate_name, 0)),
-        )
-    return get_stored_results(election_id)
+    return get_stored_results(election["election_code"])
 
 
 def get_results_history():
     rows = execute_query(
         """
-        SELECT election_id, candidate_name, votes, timestamp
-        FROM results
-        ORDER BY timestamp DESC, id DESC
+        SELECT election_id, candidate_name, COUNT(*) AS votes, MAX(created_at) AS timestamp
+        FROM blockchain
+        GROUP BY election_id, candidate_name
+        ORDER BY election_id DESC, candidate_name ASC
         """,
         fetchall=True,
     )
 
     grouped_results = OrderedDict()
-    for row in rows:
-        election_id = row["election_id"]
+    for election_id, election_rows in groupby(rows, key=lambda row: row["election_id"]):
+        election_rows = list(election_rows)
         grouped_results.setdefault(
             election_id,
-            {"timestamp": row["timestamp"], "rows": []},
+            {"timestamp": election_rows[0]["timestamp"], "rows": election_rows},
         )
-        grouped_results[election_id]["rows"].append(row)
 
     return grouped_results
+
+
+def get_results_from_blockchain(election_id, valid_only=False):
+    query = """
+        SELECT candidate_name, COUNT(*) AS votes
+        FROM blockchain
+        WHERE election_id = %s
+    """
+    if valid_only:
+        query += " AND is_valid = TRUE"
+    query += """
+        GROUP BY candidate_name
+        ORDER BY votes DESC, candidate_name ASC
+    """
+    return execute_query(query, (election_id,), fetchall=True)
 
 
 def validate_password(password):
@@ -831,8 +927,30 @@ def results():
             message="Results not available yet",
         )
 
-    result_rows = persist_results_for_election(election)
-    return render_template("results.html", election=election, results=result_rows, message=None)
+    election_id = election["election_code"]
+    verification = validate_blockchain(election_id)
+    tamper_action = get_tamper_action(election_id)
+
+    if not verification["valid"] and tamper_action == "block":
+        return render_template(
+            "results.html",
+            election=election,
+            results=None,
+            message="Blockchain tampered. Results blocked.",
+        )
+
+    result_rows = get_results_from_blockchain(
+        election_id,
+        valid_only=not verification["valid"] and tamper_action == "partial",
+    )
+    return render_template(
+        "results.html",
+        election=election,
+        results=result_rows,
+        message=None,
+        tampered=not verification["valid"],
+        tamper_action=tamper_action,
+    )
 
 
 @app.route("/admin/results")
@@ -847,8 +965,32 @@ def admin_results():
         flash("Results not available yet", "warning")
         return redirect(url_for("admin_dashboard"))
 
-    result_rows = persist_results_for_election(election)
-    return render_template("admin_results.html", election=election, result_rows=result_rows)
+    election_id = election["election_code"]
+    verification = validate_blockchain(election_id)
+    tamper_action = get_tamper_action(election_id)
+
+    if not verification["valid"] and tamper_action == "block":
+        return render_template(
+            "admin_results.html",
+            election=election,
+            result_rows=[],
+            verification=verification,
+            tamper_action=tamper_action,
+            message="Blockchain tampered. Results blocked.",
+        )
+
+    result_rows = get_results_from_blockchain(
+        election_id,
+        valid_only=not verification["valid"] and tamper_action == "partial",
+    )
+    return render_template(
+        "admin_results.html",
+        election=election,
+        result_rows=result_rows,
+        verification=verification,
+        tamper_action=tamper_action,
+        message=None,
+    )
 
 
 @app.route("/admin/results/history")
@@ -887,11 +1029,13 @@ def admin_login():
 def admin_dashboard():
     election = get_latest_election()
     candidates = get_all_candidates()
+    tamper_action = get_tamper_action(election["election_code"]) if election else "block"
 
     return render_template(
         "admin_dashboard.html",
         election=election,
         candidates=candidates,
+        tamper_action=tamper_action,
     )
 
 
@@ -929,6 +1073,33 @@ def create_election():
     except Exception:
         flash("Election ID must be unique.", "danger")
 
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/set_tamper_action", methods=["POST"])
+@admin_required
+def set_tamper_action():
+    action = request.form.get("action", "block").strip().lower()
+    election_id = get_current_election_id()
+
+    if action not in {"block", "partial"}:
+        flash("Choose a valid tampering action.", "danger")
+        return redirect(url_for("admin_dashboard"))
+
+    if not election_id:
+        flash("Create an election before saving tamper settings.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    execute_query(
+        """
+        INSERT INTO admin_settings (election_id, tamper_action)
+        VALUES (%s, %s)
+        ON CONFLICT (election_id)
+        DO UPDATE SET tamper_action = EXCLUDED.tamper_action
+        """,
+        (election_id, action),
+    )
+    flash("Tamper handling updated successfully.", "success")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -1007,8 +1178,13 @@ def delete_voter(voter_id):
 @app.route("/admin/blockchain")
 @admin_required
 def admin_blockchain():
-    verification = verify_chain()
-    return render_template("admin_blockchain.html", verification=verification)
+    election = get_latest_election()
+    if not election:
+        flash("No election is configured yet.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    verification = validate_blockchain(election["election_code"])
+    return render_template("admin_blockchain.html", verification=verification, election=election)
 
 
 @app.route("/admin/blockchain/tamper", methods=["POST"])
@@ -1019,7 +1195,12 @@ def simulate_tampering():
         flash("Enter a valid block number for tampering simulation.", "danger")
         return redirect(url_for("admin_blockchain"))
 
-    success, message = tamper_block(int(block_index))
+    election_id = get_current_election_id()
+    if not election_id:
+        flash("No election is configured yet.", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    success, message = tamper_block(election_id, int(block_index))
     flash(message, "warning" if success else "danger")
     return redirect(url_for("admin_blockchain"))
 
@@ -1041,7 +1222,6 @@ def voter_logout():
 if psycopg2 is not None and DATABASE_URL:
     with app.app_context():
         init_db()
-ensure_blockchain()
 
 
 if __name__ == "__main__":

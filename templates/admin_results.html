@@ -15,6 +15,13 @@
 <div class="card shadow-sm border-0 rounded-4">
     <div class="card-body">
         <p class="text-muted">Election ID: {{ election['election_code'] }}</p>
+        {% if message %}
+            <div class="alert alert-danger">{{ message }}</div>
+        {% elif verification and not verification['valid'] and tamper_action == 'partial' %}
+            <div class="alert alert-warning">
+                Blockchain tampering was detected. These results include only valid blocks.
+            </div>
+        {% endif %}
         <div class="table-responsive">
             <table class="table table-striped align-middle">
                 <thead>

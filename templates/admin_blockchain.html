@@ -4,10 +4,12 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h2 class="fw-bold mb-1">Blockchain</h2>
-        <p class="text-muted mb-0">View all blocks, hashes, and tampering status from the JSON ledger.</p>
+        <p class="text-muted mb-0">View all stored blocks, hashes, and tampering status for this election.</p>
     </div>
     <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
 </div>
+
+<p class="text-muted">Election ID: {{ election['election_code'] }}</p>
 
 <div class="alert {% if verification['valid'] %}alert-success{% else %}alert-danger{% endif %}">
     {% if verification['valid'] %}
@@ -55,9 +57,10 @@
         <div class="col-12">
             <div class="card shadow-sm border-0 rounded-4">
                 <div class="card-body">
-                    <h4 class="fw-bold">Block {{ block['index'] }}</h4>
-                    <p class="mb-2"><strong>Vote:</strong> {{ block['vote_data'] }}</p>
-                    <p class="mb-2"><strong>Hash:</strong> <span class="small">{{ block['current_hash'] }}</span></p>
+                    <h4 class="fw-bold">Block {{ block['block_index'] }}</h4>
+                    <p class="mb-2"><strong>Vote:</strong> {{ block['candidate_name'] }} ({{ block['party_name'] }})</p>
+                    <p class="mb-2"><strong>Voter ID:</strong> {{ block['voter_id'] }}</p>
+                    <p class="mb-2"><strong>Hash:</strong> <span class="small">{{ block['hash'] }}</span></p>
                     <p class="mb-0"><strong>Previous Hash:</strong> <span class="small">{{ block['previous_hash'] }}</span></p>
                 </div>
             </div>

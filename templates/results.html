@@ -14,6 +14,11 @@
         {% if message %}
             <div class="alert alert-warning">{{ message }}</div>
         {% else %}
+            {% if tampered and tamper_action == 'partial' %}
+                <div class="alert alert-warning">
+                    Blockchain tampering was detected. These results include only valid blocks.
+                </div>
+            {% endif %}
             {% if results %}
                 <div class="table-responsive">
                     <table class="table table-striped align-middle">
