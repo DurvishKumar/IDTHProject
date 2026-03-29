@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Voter Registration{% endblock %}
+{% block content %}
+<div class="card shadow-sm border-0 rounded-4">
+    <div class="card-body p-4 p-lg-5">
+        <h2 class="fw-bold mb-4">Voter Registration</h2>
+        {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+        <form method="post" class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">Full Name</label>
+                <input type="text" class="form-control" name="name" value="{{ form_data.name if form_data else '' }}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Date of Birth</label>
+                <input type="date" class="form-control" name="dob" value="{{ form_data.dob if form_data else '' }}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Gender</label>
+                <select class="form-select" name="gender" required>
+                    <option value="">Select</option>
+                    <option value="Male" {% if form_data and form_data.gender == 'Male' %}selected{% endif %}>Male</option>
+                    <option value="Female" {% if form_data and form_data.gender == 'Female' %}selected{% endif %}>Female</option>
+                    <option value="Other" {% if form_data and form_data.gender == 'Other' %}selected{% endif %}>Other</option>
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Father's Name</label>
+                <input type="text" class="form-control" name="father_name" value="{{ form_data.father_name if form_data else '' }}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Aadhaar Number</label>
+                <input type="text" class="form-control" name="aadhaar" value="{{ form_data.aadhaar if form_data else '' }}" maxlength="12" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Confirm Aadhaar</label>
+                <input type="text" class="form-control" name="confirm_aadhaar" value="{{ form_data.confirm_aadhaar if form_data else '' }}" maxlength="12" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Contact (Email or 10-digit Phone)</label>
+                <input type="text" class="form-control" name="contact" value="{{ form_data.contact if form_data else '' }}" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Constituency</label>
+                <input type="text" class="form-control" name="constituency" value="{{ form_data.constituency if form_data else '' }}" required>
+            </div>
+            <div class="col-12">
+                <label class="form-label">Address</label>
+                <textarea class="form-control" name="address" rows="3" required>{{ form_data.address if form_data else '' }}</textarea>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-control" name="password" value="{{ form_data.password if form_data else '' }}" required>
+                <div class="form-text">Use 8+ characters with uppercase, lowercase, number, and special symbol.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Confirm Password</label>
+                <input type="password" class="form-control" name="confirm_password" value="{{ form_data.confirm_password if form_data else '' }}" required>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-dark btn-lg">Register Voter</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+:root {
+    --app-primary: #123458;
+    --app-secondary: #1f6f78;
+    --app-accent: #f4b942;
+    --app-bg: #f6f8fb;
+}
+
+body {
+    background: linear-gradient(180deg, #eef4ff 0%, var(--app-bg) 100%);
+    min-height: 100vh;
+}
+
+.app-navbar {
+    background: linear-gradient(135deg, var(--app-primary), var(--app-secondary));
+}
+
+.hero-card {
+    background: #ffffff;
+    border: 1px solid rgba(18, 52, 88, 0.08);
+}
+
+.info-panel {
+    background: linear-gradient(180deg, rgba(18, 52, 88, 0.06), rgba(31, 111, 120, 0.08));
+    border: 1px solid rgba(18, 52, 88, 0.08);
+}
+
+.candidate-option {
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.candidate-option:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 24px rgba(18, 52, 88, 0.12);
+}
+
+pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+}

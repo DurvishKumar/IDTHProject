@@ -1,0 +1,11 @@
+[
+    {
+        "index": 0,
+        "timestamp": "2026-01-01T00:00:00",
+        "vote_data": {
+            "message": "Genesis Block"
+        },
+        "previous_hash": "0",
+        "current_hash": "12c73349f59344b210ca503705b3193796b0c788c1e4d43af702e564d8d65d9b"
+    }
+]

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Home | Blockchain E-Voting{% endblock %}
+{% block content %}
+<section class="hero-card p-4 p-lg-5 rounded-4 shadow-sm">
+    <div class="row align-items-center g-4">
+        <div class="col-lg-7">
+            <span class="badge text-bg-light mb-3">Secure Digital Elections</span>
+            <h1 class="display-5 fw-bold mb-3">Blockchain-based E-Voting Web Application</h1>
+            <p class="lead text-muted mb-4">
+                A complete Flask project with SQLite user storage, blockchain vote storage, and beginner-friendly admin controls.
+            </p>
+            <div class="d-flex flex-wrap gap-3">
+                <a href="{{ url_for('admin_login') }}" class="btn btn-primary btn-lg">Admin Login</a>
+                <a href="{{ url_for('voter_login') }}" class="btn btn-success btn-lg">Voter Login</a>
+                <a href="{{ url_for('register') }}" class="btn btn-outline-dark btn-lg">Voter Registration</a>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="info-panel rounded-4 p-4">
+                <h4 class="fw-semibold">Current Election Status</h4>
+                {% if current_election %}
+                    <p class="mb-2"><strong>Election ID:</strong> {{ current_election['election_code'] }}</p>
+                    <p class="mb-2"><strong>Start:</strong> {{ current_election['start_time'] }}</p>
+                    <p class="mb-2"><strong>End:</strong> {{ current_election['end_time'] }}</p>
+                    <span class="badge fs-6 {% if current_election_status == 'active' %}text-bg-success{% elif current_election_status == 'not_started' %}text-bg-warning{% elif current_election_status == 'ended' %}text-bg-secondary{% else %}text-bg-dark{% endif %}">
+                        {{ current_election_status.replace('_', ' ').title() }}
+                    </span>
+                {% else %}
+                    <p class="mb-0 text-muted">No election has been configured yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

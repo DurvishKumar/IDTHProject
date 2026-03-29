@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Voter Login{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card shadow-sm border-0 rounded-4">
+            <div class="card-body p-4">
+                <h2 class="fw-bold mb-3">Voter Login</h2>
+                {% if election %}
+                    <div class="alert {% if election_status == 'active' %}alert-success{% elif election_status == 'not_started' %}alert-warning{% elif election_status == 'ended' %}alert-secondary{% else %}alert-dark{% endif %}">
+                        <strong>Election ID:</strong> {{ election['election_code'] }}<br>
+                        <strong>Status:</strong> {{ election_status.replace('_', ' ').title() }}<br>
+                        <strong>Start:</strong> {{ election['start_time'] }}<br>
+                        <strong>End:</strong> {{ election['end_time'] }}
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">No election is configured right now.</div>
+                {% endif %}
+
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label">Voter ID</label>
+                        <input type="text" class="form-control" name="voter_id" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" name="password" required>
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">Login as Voter</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
