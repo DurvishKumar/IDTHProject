@@ -7,14 +7,6 @@
         {% if error %}
             <div class="alert alert-danger">{{ error }}</div>
         {% endif %}
-        {% if info %}
-            <div class="alert alert-info">{{ info }}</div>
-        {% endif %}
-        <div
-            id="otpMeta"
-            data-resend-wait="{{ resend_wait_seconds }}"
-            data-expiry-seconds="{{ expiry_remaining_seconds }}">
-        </div>
         <form method="post" class="row g-3">
             <div class="col-md-6">
                 <label class="form-label">Full Name</label>
@@ -76,19 +68,8 @@
                     <button class="btn btn-outline-secondary js-password-toggle" type="button">Show</button>
                 </div>
             </div>
-            <div class="col-md-6">
-                <label class="form-label">Verify OTP</label>
-                <input type="text" class="form-control" name="otp" value="{{ form_data.otp if form_data else '' }}" maxlength="6" inputmode="numeric" pattern="\d{6}">
-                <div class="form-text">Enter the 6-digit OTP sent to your phone.</div>
-                <div class="small mt-2 text-muted" id="otpExpiryMessage"></div>
-            </div>
             <div class="col-12 d-flex flex-wrap gap-2">
-                <button type="submit" name="action" value="send_otp" class="btn btn-outline-primary btn-lg">Send OTP</button>
-                <button type="submit" name="action" value="resend_otp" class="btn btn-outline-secondary btn-lg" id="resendOtpButton">Resend OTP</button>
                 <button type="submit" name="action" value="register" class="btn btn-dark btn-lg">Register Voter</button>
-            </div>
-            <div class="col-12">
-                <div class="small text-muted" id="resendOtpMessage"></div>
             </div>
         </form>
     </div>

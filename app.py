@@ -1,42 +1,15 @@
 import json
 import os
-import random
 import re
 import sqlite3
 import uuid
 from collections import OrderedDict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from functools import wraps
 from hashlib import sha256
-from urllib import parse, request as urllib_request
 
 import pytz
 from flask import Flask, flash, redirect, render_template, request, session, url_for
-
-try:
-    import requests
-except ImportError:
-    class _FallbackResponse:
-        def __init__(self, status_code, text):
-            self.status_code = status_code
-            self.text = text
-
-        def raise_for_status(self):
-            if self.status_code >= 400:
-                raise ValueError(f"HTTP {self.status_code}")
-
-        def json(self):
-            return json.loads(self.text)
-
-    class _RequestsFallback:
-        @staticmethod
-        def post(url, data=None, headers=None, timeout=15):
-            encoded_data = parse.urlencode(data or {}).encode("utf-8")
-            request_object = urllib_request.Request(url, data=encoded_data, headers=headers or {}, method="POST")
-            with urllib_request.urlopen(request_object, timeout=timeout) as response:
-                return _FallbackResponse(response.status, response.read().decode("utf-8"))
-
-    requests = _RequestsFallback()
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -136,7 +109,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            election_id TEXT NOT NULL,
+            election_id TEXT DEFAULT 'GENERAL',
             candidate_name TEXT NOT NULL,
             party_name TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -144,6 +117,14 @@ def init_db():
         )
         """
     )
+
+    candidate_columns = {
+        column_info["name"] for column_info in cursor.execute("PRAGMA table_info(candidates)").fetchall()
+    }
+    if "election_id" not in candidate_columns:
+        cursor.execute("ALTER TABLE candidates ADD COLUMN election_id TEXT DEFAULT 'GENERAL'")
+
+    cursor.execute("UPDATE candidates SET election_id = 'GENERAL' WHERE election_id IS NULL OR election_id = ''")
 
     cursor.execute(
         """
@@ -480,28 +461,14 @@ def build_registration_form_data(source=None):
         "email": (data.get("email") or "").lower(),
         "password": data.get("password", ""),
         "confirm_password": data.get("confirm_password", ""),
-        "otp": data.get("otp", ""),
     }
 
 
-def render_register_form(form_data=None, error=None, info=None, otp_sent=False):
-    otp_time_value = session.get("otp_time")
-    resend_wait_seconds = 0
-    expiry_remaining_seconds = 0
-
-    if otp_time_value:
-        otp_time = datetime.fromisoformat(otp_time_value)
-        resend_wait_seconds = max(0, int((otp_time + timedelta(minutes=1) - datetime.now()).total_seconds()))
-        expiry_remaining_seconds = max(0, int((otp_time + timedelta(minutes=2) - datetime.now()).total_seconds()))
-
+def render_register_form(form_data=None, error=None):
     return render_template(
         "register.html",
         form_data=build_registration_form_data(form_data),
         error=error,
-        info=info,
-        otp_sent=otp_sent,
-        resend_wait_seconds=resend_wait_seconds,
-        expiry_remaining_seconds=expiry_remaining_seconds,
     )
 
 
@@ -514,39 +481,9 @@ def inject_common_context():
     }
 
 
-def store_register_feedback(form_data=None, error=None, info=None, otp_sent=False):
+def store_register_feedback(form_data=None, error=None):
     session["registration_form_data"] = build_registration_form_data(form_data)
     session["registration_error"] = error
-    session["registration_info"] = info
-    session["registration_otp_sent"] = otp_sent
-
-
-def send_otp(phone, otp):
-    print("OTP SENT:", otp)
-    api_key = os.environ.get("FAST2SMS_API_KEY")
-    if not api_key:
-        return False, "OTP generated successfully. Check server console for debug OTP."
-
-    url = "https://www.fast2sms.com/dev/bulkV2"
-    payload = {
-        "variables_values": otp,
-        "route": "otp",
-        "numbers": phone,
-    }
-    headers = {
-        "authorization": api_key,
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    try:
-        response = requests.post(url, data=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-        response_data = response.json()
-        if not response_data.get("return"):
-            raise ValueError("Fast2SMS rejected the OTP request.")
-        return True, "OTP sent successfully."
-    except Exception:
-        return True, "OTP generated successfully. SMS API failed, so check server console for debug OTP."
 
 
 @app.route("/")
@@ -570,8 +507,6 @@ def register():
         email = form_data["email"].strip()
         password = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
-        otp = request.form.get("otp", "").strip()
-        action = request.form.get("action", "register")
 
         if not all(
             [
@@ -636,56 +571,6 @@ def register():
             return redirect(url_for("register"))
         connection.close()
 
-        if action in {"send_otp", "resend_otp"}:
-            otp_time_value = session.get("otp_time")
-            if action == "resend_otp" and otp_time_value:
-                otp_time = datetime.fromisoformat(otp_time_value)
-                if datetime.now() < otp_time + timedelta(minutes=1):
-                    store_register_feedback(form_data, error="Please wait before requesting new OTP", otp_sent=True)
-                    return redirect(url_for("register"))
-
-            generated_otp = str(random.randint(100000, 999999))
-            session["otp"] = generated_otp
-            session["otp_time"] = datetime.now().isoformat()
-            session["otp_phone"] = phone_number
-
-            info_message = None
-            try:
-                sent, message = send_otp(phone_number, generated_otp)
-                if sent and "demo mode" not in message.lower():
-                    info_message = "OTP sent successfully to your phone number."
-                else:
-                    info_message = f"{message} Demo OTP: {generated_otp}"
-            except Exception:
-                info_message = f"Unable to send SMS right now. Demo OTP: {generated_otp}"
-
-            store_register_feedback(form_data, info=info_message, otp_sent=True)
-            return redirect(url_for("register"))
-
-        if "otp" not in session:
-            store_register_feedback(form_data, error="Please generate OTP first.")
-            return redirect(url_for("register"))
-
-        if session.get("otp_phone") != phone_number:
-            store_register_feedback(form_data, error="OTP is linked to a different phone number.", otp_sent=True)
-            return redirect(url_for("register"))
-
-        otp_time = datetime.fromisoformat(session["otp_time"])
-        if datetime.now() > otp_time + timedelta(minutes=2):
-            session.pop("otp", None)
-            session.pop("otp_time", None)
-            session.pop("otp_phone", None)
-            store_register_feedback(form_data, error="OTP expired", otp_sent=False)
-            return redirect(url_for("register"))
-
-        if otp != session.get("otp"):
-            store_register_feedback(
-                form_data,
-                error="Invalid OTP. Please enter the 6-digit OTP sent to your phone.",
-                otp_sent=True,
-            )
-            return redirect(url_for("register"))
-
         voter_id = generate_unique_voter_id()
         hashed_password = hash_text(password)
         connection = get_db_connection()
@@ -717,19 +602,15 @@ def register():
         )
         connection.commit()
         connection.close()
-        session.pop("otp", None)
-        session.pop("otp_time", None)
-        session.pop("otp_phone", None)
         session.pop("registration_form_data", None)
+        session.pop("registration_error", None)
 
         flash(f"Registration successful. Your voter ID is {voter_id}", "success")
         return redirect(url_for("voter_login"))
 
     form_data = session.pop("registration_form_data", None)
     error = session.pop("registration_error", None)
-    info = session.pop("registration_info", None)
-    otp_sent = session.pop("registration_otp_sent", False)
-    return render_register_form(form_data, error=error, info=info, otp_sent=otp_sent)
+    return render_register_form(form_data, error=error)
 
 
 @app.route("/voter/login", methods=["GET", "POST"])
@@ -971,24 +852,7 @@ def create_election():
 @admin_required
 def add_candidate():
     election = get_latest_election()
-    if not election:
-        flash("Please create election first", "warning")
-        return redirect(url_for("admin_dashboard"))
-
-    election_id = election["election_code"]
-    if not election_id:
-        flash("Please create election first", "warning")
-        return redirect(url_for("admin_dashboard"))
-
-    connection = get_db_connection()
-    election_exists = connection.execute(
-        "SELECT id FROM elections WHERE election_code = ?",
-        (election_id,),
-    ).fetchone()
-    if not election_exists:
-        connection.close()
-        flash("Please create election first", "warning")
-        return redirect(url_for("admin_dashboard"))
+    election_id = election["election_code"] if election else "GENERAL"
 
     candidate_name = request.form.get("candidate_name", "").strip()
     party_name = request.form.get("party_name", "").strip()
@@ -997,6 +861,7 @@ def add_candidate():
         flash("Candidate name and party name are required.", "danger")
         return redirect(url_for("admin_dashboard"))
 
+    connection = get_db_connection()
     connection.execute(
         """
         INSERT INTO candidates (election_id, candidate_name, party_name, created_at)
