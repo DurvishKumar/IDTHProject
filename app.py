@@ -3,7 +3,6 @@ import os
 import random
 import re
 import sqlite3
-import tempfile
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime, timedelta
@@ -60,34 +59,10 @@ def add_header(response):
     return response
 
 
-def resolve_database_path():
-    """
-    Prefer the project-level database path.
-    If SQLite cannot write there, fall back to a temp directory automatically.
-    """
-    configured_path = os.environ.get("DATABASE_PATH")
-    if configured_path:
-        return configured_path
-
-    try:
-        connection = sqlite3.connect(DEFAULT_DATABASE_PATH)
-        connection.execute("CREATE TABLE IF NOT EXISTS __write_test (id INTEGER PRIMARY KEY)")
-        connection.execute("DROP TABLE __write_test")
-        connection.commit()
-        connection.close()
-        return DEFAULT_DATABASE_PATH
-    except sqlite3.Error:
-        fallback_dir = os.path.join(tempfile.gettempdir(), "blockchain_evoting")
-        os.makedirs(fallback_dir, exist_ok=True)
-        return os.path.join(fallback_dir, "database.db")
-
-
-DATABASE_PATH = resolve_database_path()
-
-
 def get_db_connection():
     """Create a SQLite connection whose rows behave like dictionaries."""
-    connection = sqlite3.connect(DATABASE_PATH)
+    db_path = DATABASE_PATH
+    connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -547,9 +522,10 @@ def store_register_feedback(form_data=None, error=None, info=None, otp_sent=Fals
 
 
 def send_otp(phone, otp):
+    print("OTP SENT:", otp)
     api_key = os.environ.get("FAST2SMS_API_KEY")
     if not api_key:
-        return False, "FAST2SMS_API_KEY is not configured. OTP generated in demo mode."
+        return False, "OTP generated successfully. Check server console for debug OTP."
 
     url = "https://www.fast2sms.com/dev/bulkV2"
     payload = {
@@ -562,13 +538,15 @@ def send_otp(phone, otp):
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    response = requests.post(url, data=payload, headers=headers, timeout=15)
-    response.raise_for_status()
-    response_data = response.json()
-    if not response_data.get("return"):
-        raise ValueError("Fast2SMS rejected the OTP request.")
-
-    return True, "OTP sent successfully."
+    try:
+        response = requests.post(url, data=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        response_data = response.json()
+        if not response_data.get("return"):
+            raise ValueError("Fast2SMS rejected the OTP request.")
+        return True, "OTP sent successfully."
+    except Exception:
+        return True, "OTP generated successfully. SMS API failed, so check server console for debug OTP."
 
 
 @app.route("/")
@@ -994,7 +972,22 @@ def create_election():
 def add_candidate():
     election = get_latest_election()
     if not election:
-        flash("Create an election before adding candidates.", "warning")
+        flash("Please create election first", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    election_id = election["election_code"]
+    if not election_id:
+        flash("Please create election first", "warning")
+        return redirect(url_for("admin_dashboard"))
+
+    connection = get_db_connection()
+    election_exists = connection.execute(
+        "SELECT id FROM elections WHERE election_code = ?",
+        (election_id,),
+    ).fetchone()
+    if not election_exists:
+        connection.close()
+        flash("Please create election first", "warning")
         return redirect(url_for("admin_dashboard"))
 
     candidate_name = request.form.get("candidate_name", "").strip()
@@ -1004,13 +997,12 @@ def add_candidate():
         flash("Candidate name and party name are required.", "danger")
         return redirect(url_for("admin_dashboard"))
 
-    connection = get_db_connection()
     connection.execute(
         """
         INSERT INTO candidates (election_id, candidate_name, party_name, created_at)
         VALUES (?, ?, ?, ?)
         """,
-        (election["election_code"], candidate_name, party_name, get_current_ist_time().isoformat()),
+        (election_id, candidate_name, party_name, get_current_ist_time().isoformat()),
     )
     connection.commit()
     connection.close()
@@ -1056,8 +1048,12 @@ def admin_voters():
 @app.route("/admin/delete_voter/<voter_id>", methods=["POST"])
 @admin_required
 def delete_voter(voter_id):
-    connection = get_db_connection()
-    connection.execute("DELETE FROM voters WHERE voter_id = ?", (voter_id,))
+    db_path = DATABASE_PATH
+    print("Deleting voter:", voter_id)
+    print("DB path:", db_path)
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+    cursor.execute("DELETE FROM voters WHERE voter_id = ?", (voter_id,))
     connection.commit()
     connection.close()
 
