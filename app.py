@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import string
 from collections import OrderedDict
@@ -70,10 +71,6 @@ def get_db_connection():
 def hash_text(value):
     """Create a SHA-256 hash for passwords, Aadhaar numbers, and block data."""
     return sha256(value.encode("utf-8")).hexdigest()
-
-
-def hash_aadhaar(aadhaar):
-    return hash_text(aadhaar)
 
 
 def init_db():
@@ -477,19 +474,19 @@ def calculate_age(dob_text):
     return years
 
 
-def generate_voter_id_from_aadhaar(aadhaar):
-    hash_value = hash_aadhaar(aadhaar)
-    allowed_chars = string.ascii_uppercase + string.digits
+def generate_voter_id():
+    chars = string.ascii_uppercase + string.digits
+    return "".join(random.choices(chars, k=10))
 
-    voter_id = ""
-    for ch in hash_value:
-        index = int(ch, 16) % len(allowed_chars)
-        voter_id += allowed_chars[index]
 
-        if len(voter_id) == 10:
-            break
-
-    return voter_id
+def generate_unique_voter_id(connection):
+    while True:
+        voter_id = generate_voter_id()
+        cursor = connection.execute("SELECT 1 FROM voters WHERE voter_id = %s", (voter_id,))
+        if not cursor.fetchone():
+            cursor.close()
+            return voter_id
+        cursor.close()
 
 
 def build_registration_form_data(source=None):
@@ -605,7 +602,7 @@ def register():
             store_register_feedback(form_data, error="Password and confirm password do not match.")
             return redirect(url_for("register"))
 
-        hashed_aadhaar = hash_aadhaar(aadhaar)
+        hashed_aadhaar = hash_text(aadhaar)
         connection = get_db_connection()
         existing_voter = connection.execute(
             "SELECT voter_id FROM voters WHERE hashed_aadhaar = %s",
@@ -616,9 +613,8 @@ def register():
             store_register_feedback(form_data, error="User already registered.")
             return redirect(url_for("register"))
 
-        voter_id = generate_voter_id_from_aadhaar(aadhaar)
+        voter_id = generate_unique_voter_id(connection)
         hashed_password = hash_text(password)
-        connection = get_db_connection()
         connection.execute(
             """
             INSERT INTO voters (
