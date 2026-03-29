@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Results History{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1">Results History</h2>
+        <p class="text-muted mb-0">Stored results are grouped by election ID and kept permanently in SQLite.</p>
+    </div>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+</div>
+
+{% for election_id, group in grouped_results.items() %}
+    <div class="card shadow-sm border-0 rounded-4 mb-4">
+        <div class="card-body">
+            <h4 class="fw-bold mb-1">Election ID: {{ election_id }}</h4>
+            <p class="text-muted">Stored at: {{ group['timestamp'] }}</p>
+            <div class="table-responsive">
+                <table class="table table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>Candidate</th>
+                            <th>Votes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in group['rows'] %}
+                            <tr>
+                                <td>{{ row['candidate_name'] }}</td>
+                                <td>{{ row['votes'] }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+{% else %}
+    <div class="alert alert-info">No stored results found yet.</div>
+{% endfor %}
+{% endblock %}

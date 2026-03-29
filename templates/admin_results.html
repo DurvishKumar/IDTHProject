@@ -6,7 +6,10 @@
         <h2 class="fw-bold mb-1">Election Results</h2>
         <p class="text-muted mb-0">Results are shown only after the election end time.</p>
     </div>
-    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('admin_results_history') }}" class="btn btn-outline-secondary">Results History</a>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">Back to Dashboard</a>
+    </div>
 </div>
 
 <div class="card shadow-sm border-0 rounded-4">
@@ -21,10 +24,10 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for candidate_name, vote_count in result_rows.items() %}
+                    {% for row in result_rows %}
                         <tr>
-                            <td>{{ candidate_name }}</td>
-                            <td>{{ vote_count }}</td>
+                            <td>{{ row['candidate_name'] }}</td>
+                            <td>{{ row['votes'] }}</td>
                         </tr>
                     {% else %}
                         <tr>

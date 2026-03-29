@@ -5,6 +5,7 @@ import re
 import sqlite3
 import tempfile
 import uuid
+from collections import OrderedDict
 from datetime import date, datetime
 from functools import wraps
 from hashlib import sha256
@@ -100,7 +101,7 @@ def init_db():
             constituency TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             has_voted INTEGER DEFAULT 0,
-            voted_election_id INTEGER,
+            voted_election_id TEXT,
             created_at TEXT NOT NULL
         )
         """
@@ -134,11 +135,23 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            election_id INTEGER NOT NULL,
+            election_id TEXT NOT NULL,
             candidate_name TEXT NOT NULL,
             party_name TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY (election_id) REFERENCES elections (id)
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            election_id TEXT,
+            candidate_name TEXT,
+            votes INTEGER,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -343,6 +356,72 @@ def calculate_results(election_id):
     return results
 
 
+def get_stored_results(election_id):
+    connection = get_db_connection()
+    rows = connection.execute(
+        """
+        SELECT candidate_name, votes, timestamp
+        FROM results
+        WHERE election_id = ?
+        ORDER BY id ASC
+        """,
+        (election_id,),
+    ).fetchall()
+    connection.close()
+    return rows
+
+
+def persist_results_for_election(election):
+    """
+    Persist results once per election after it ends.
+    Results are stored in SQLite and read from there afterwards.
+    """
+    election_id = election["election_code"]
+    existing_results = get_stored_results(election_id)
+    if existing_results:
+        return existing_results
+
+    candidate_rows = get_candidates_for_election(election_id)
+    blockchain_counts = calculate_results(election_id)
+
+    connection = get_db_connection()
+    for candidate in candidate_rows:
+        candidate_name = candidate["candidate_name"]
+        connection.execute(
+            """
+            INSERT INTO results (election_id, candidate_name, votes)
+            VALUES (?, ?, ?)
+            """,
+            (election_id, candidate_name, blockchain_counts.get(candidate_name, 0)),
+        )
+    connection.commit()
+    connection.close()
+    return get_stored_results(election_id)
+
+
+def get_results_history():
+    connection = get_db_connection()
+    rows = connection.execute(
+        """
+        SELECT election_id, candidate_name, votes, timestamp
+        FROM results
+        ORDER BY timestamp DESC, id DESC
+        """
+    ).fetchall()
+    connection.close()
+
+    grouped_results = OrderedDict()
+    for row in rows:
+        election_id = row["election_id"]
+        grouped_results.setdefault(
+            election_id,
+            {"timestamp": row["timestamp"], "rows": []},
+        )
+        grouped_results[election_id]["rows"].append(row)
+
+    return grouped_results
+
+
 def validate_password(password):
     """Check the password against the requested minimum rule."""
     if len(password) < 6:
@@ -423,6 +502,13 @@ def inject_common_context():
     }
 
 
+def store_register_feedback(form_data=None, error=None, info=None, otp_sent=False):
+    session["registration_form_data"] = build_registration_form_data(form_data)
+    session["registration_error"] = error
+    session["registration_info"] = info
+    session["registration_otp_sent"] = otp_sent
+
+
 @app.route("/")
 def home():
     return render_template("home.html")
@@ -462,32 +548,41 @@ def register():
                 confirm_password,
             ]
         ):
-            return render_register_form(form_data, error="Please fill in every required field.")
+            store_register_feedback(form_data, error="Please fill in every required field.")
+            return redirect(url_for("register"))
 
         try:
             if calculate_age(dob) < 18:
-                return render_register_form(form_data, error="Voter must be at least 18 years old.")
+                store_register_feedback(form_data, error="Voter must be at least 18 years old.")
+                return redirect(url_for("register"))
         except ValueError:
-            return render_register_form(form_data, error="Please enter a valid date of birth.")
+            store_register_feedback(form_data, error="Please enter a valid date of birth.")
+            return redirect(url_for("register"))
 
         if not re.fullmatch(r"\d{12}", aadhaar):
-            return render_register_form(form_data, error="Aadhaar must contain exactly 12 digits.")
+            store_register_feedback(form_data, error="Aadhaar must contain exactly 12 digits.")
+            return redirect(url_for("register"))
 
         if aadhaar != confirm_aadhaar:
-            return render_register_form(form_data, error="Aadhaar and confirm Aadhaar do not match.")
+            store_register_feedback(form_data, error="Aadhaar and confirm Aadhaar do not match.")
+            return redirect(url_for("register"))
 
         if not validate_phone_number(phone_number):
-            return render_register_form(form_data, error="Phone number must contain exactly 10 digits.")
+            store_register_feedback(form_data, error="Phone number must contain exactly 10 digits.")
+            return redirect(url_for("register"))
 
         if not validate_email(email):
-            return render_register_form(form_data, error="Please enter a valid email address.")
+            store_register_feedback(form_data, error="Please enter a valid email address.")
+            return redirect(url_for("register"))
 
         password_valid, password_message = validate_password(password)
         if not password_valid:
-            return render_register_form(form_data, error=password_message)
+            store_register_feedback(form_data, error=password_message)
+            return redirect(url_for("register"))
 
         if password != confirm_password:
-            return render_register_form(form_data, error="Password and confirm password do not match.")
+            store_register_feedback(form_data, error="Password and confirm password do not match.")
+            return redirect(url_for("register"))
 
         hashed_aadhaar = hash_text(aadhaar)
         connection = get_db_connection()
@@ -497,30 +592,33 @@ def register():
         ).fetchone()
         if existing_voter:
             connection.close()
-            return render_register_form(form_data, error="A voter with this Aadhaar already exists.")
+            store_register_feedback(form_data, error="A voter with this Aadhaar already exists.")
+            return redirect(url_for("register"))
         connection.close()
 
         if action == "send_otp":
             generated_otp = str(random.randint(100000, 999999))
             session["registration_otp"] = generated_otp
             session["registration_phone"] = phone_number
-            session["registration_form_data"] = form_data
-            return render_register_form(
+            store_register_feedback(
                 form_data,
                 info=f"Simulated OTP for testing: {generated_otp}",
                 otp_sent=True,
             )
+            return redirect(url_for("register"))
 
         session_form_data = session.get("registration_form_data")
         if not session_form_data or session.get("registration_phone") != phone_number:
-            return render_register_form(form_data, error="Please generate OTP first.")
+            store_register_feedback(form_data, error="Please generate OTP first.")
+            return redirect(url_for("register"))
 
         if otp != session.get("registration_otp"):
-            return render_register_form(
+            store_register_feedback(
                 form_data,
                 error="Invalid OTP. Please enter the 6-digit OTP sent to your phone.",
                 otp_sent=True,
             )
+            return redirect(url_for("register"))
 
         voter_id = generate_unique_voter_id()
         hashed_password = hash_text(password)
@@ -560,8 +658,11 @@ def register():
         flash(f"Registration successful. Your voter ID is {voter_id}", "success")
         return redirect(url_for("voter_login"))
 
-    session.pop("registration_form_data", None)
-    return render_register_form()
+    form_data = session.pop("registration_form_data", None)
+    error = session.pop("registration_error", None)
+    info = session.pop("registration_info", None)
+    otp_sent = session.pop("registration_otp_sent", False)
+    return render_register_form(form_data, error=error, info=info, otp_sent=otp_sent)
 
 
 @app.route("/voter/login", methods=["GET", "POST"])
@@ -629,11 +730,11 @@ def vote():
         flash("Election is not active, so voting is blocked.", "warning")
         return redirect(url_for("home"))
 
-    if voter["has_voted"] and voter["voted_election_id"] == election["id"]:
+    if voter["has_voted"] and voter["voted_election_id"] == election["election_code"]:
         flash("You have already voted in this election.", "warning")
-        return redirect(url_for("results"))
+        return redirect(url_for("home"))
 
-    candidates = get_candidates_for_election(election["id"])
+    candidates = get_candidates_for_election(election["election_code"])
     if not candidates:
         flash("No candidates are available for this election yet.", "warning")
         return redirect(url_for("home"))
@@ -651,7 +752,7 @@ def vote():
         ).fetchone()
         candidate = connection.execute(
             "SELECT * FROM candidates WHERE id = ? AND election_id = ?",
-            (selected_candidate_id, election["id"]),
+            (selected_candidate_id, election["election_code"]),
         ).fetchone()
         connection.close()
 
@@ -659,16 +760,16 @@ def vote():
             flash("Election is no longer active. Vote was not recorded.", "danger")
             return redirect(url_for("home"))
 
-        if voter["has_voted"] and voter["voted_election_id"] == election["id"]:
+        if voter["has_voted"] and voter["voted_election_id"] == election["election_code"]:
             flash("You have already voted in this election.", "warning")
-            return redirect(url_for("results"))
+            return redirect(url_for("home"))
 
         if not candidate:
             flash("Selected candidate was not found.", "danger")
             return redirect(url_for("vote"))
 
         vote_data = {
-            "election_id": election["id"],
+            "election_id": election["election_code"],
             "election_code": election["election_code"],
             "voter_id": voter["voter_id"],
             "candidate_id": candidate["id"],
@@ -680,7 +781,7 @@ def vote():
         connection = get_db_connection()
         connection.execute(
             "UPDATE voters SET has_voted = 1, voted_election_id = ? WHERE voter_id = ?",
-            (election["id"], voter["voter_id"]),
+            (election["election_code"], voter["voter_id"]),
         )
         connection.commit()
         connection.close()
@@ -693,26 +794,8 @@ def vote():
 
 @app.route("/results")
 def results():
-    election = get_latest_election()
-    if not election:
-        flash("No election is configured yet.", "warning")
-        return redirect(url_for("home"))
-
-    if get_election_status(election) != "ended":
-        flash("Results are available only after the election ends.", "warning")
-        return redirect(url_for("home"))
-
-    verification = verify_chain()
-    allow_tampered_results = request.args.get("proceed") == "1" and session.get("admin_id")
-    result_rows = calculate_results(election["id"]) if verification["valid"] or allow_tampered_results else {}
-
-    return render_template(
-        "results.html",
-        election=election,
-        verification=verification,
-        result_rows=result_rows,
-        allow_tampered_results=allow_tampered_results,
-    )
+    flash("Results are available only from the admin results page.", "warning")
+    return redirect(url_for("home"))
 
 
 @app.route("/admin/results")
@@ -727,8 +810,14 @@ def admin_results():
         flash("Results not available yet", "warning")
         return redirect(url_for("admin_dashboard"))
 
-    result_rows = calculate_results(election["id"])
+    result_rows = persist_results_for_election(election)
     return render_template("admin_results.html", election=election, result_rows=result_rows)
+
+
+@app.route("/admin/results/history")
+@admin_required
+def admin_results_history():
+    return render_template("admin_results_history.html", grouped_results=get_results_history())
 
 
 @app.route("/admin/login", methods=["GET", "POST"])
@@ -761,7 +850,7 @@ def admin_login():
 @admin_required
 def admin_dashboard():
     election = get_latest_election()
-    candidates = get_candidates_for_election(election["id"]) if election else []
+    candidates = get_candidates_for_election(election["election_code"]) if election else []
 
     return render_template(
         "admin_dashboard.html",
@@ -832,7 +921,7 @@ def add_candidate():
         INSERT INTO candidates (election_id, candidate_name, party_name, created_at)
         VALUES (?, ?, ?, ?)
         """,
-        (election["id"], candidate_name, party_name, get_current_ist_time().isoformat()),
+        (election["election_code"], candidate_name, party_name, get_current_ist_time().isoformat()),
     )
     connection.commit()
     connection.close()
