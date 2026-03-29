@@ -7,10 +7,13 @@
         {% if error %}
             <div class="alert alert-danger">{{ error }}</div>
         {% endif %}
+        {% if info %}
+            <div class="alert alert-info">{{ info }}</div>
+        {% endif %}
         <form method="post" class="row g-3">
             <div class="col-md-6">
                 <label class="form-label">Full Name</label>
-                <input type="text" class="form-control" name="name" value="{{ form_data.name if form_data else '' }}" required>
+                <input type="text" class="form-control js-uppercase" name="full_name" value="{{ form_data.full_name if form_data else '' }}" required>
             </div>
             <div class="col-md-3">
                 <label class="form-label">Date of Birth</label>
@@ -27,39 +30,55 @@
             </div>
             <div class="col-md-6">
                 <label class="form-label">Father's Name</label>
-                <input type="text" class="form-control" name="father_name" value="{{ form_data.father_name if form_data else '' }}" required>
+                <input type="text" class="form-control js-uppercase" name="father_name" value="{{ form_data.father_name if form_data else '' }}" required>
             </div>
             <div class="col-md-3">
                 <label class="form-label">Aadhaar Number</label>
-                <input type="text" class="form-control" name="aadhaar" value="{{ form_data.aadhaar if form_data else '' }}" maxlength="12" required>
+                <input type="text" class="form-control" name="aadhaar" value="{{ form_data.aadhaar if form_data else '' }}" maxlength="12" inputmode="numeric" pattern="\d{12}" required>
             </div>
             <div class="col-md-3">
                 <label class="form-label">Confirm Aadhaar</label>
-                <input type="text" class="form-control" name="confirm_aadhaar" value="{{ form_data.confirm_aadhaar if form_data else '' }}" maxlength="12" required>
+                <input type="text" class="form-control" name="confirm_aadhaar" value="{{ form_data.confirm_aadhaar if form_data else '' }}" maxlength="12" inputmode="numeric" pattern="\d{12}" required>
             </div>
             <div class="col-md-6">
-                <label class="form-label">Contact (Email or 10-digit Phone)</label>
-                <input type="text" class="form-control" name="contact" value="{{ form_data.contact if form_data else '' }}" required>
+                <label class="form-label">Phone Number</label>
+                <input type="text" class="form-control" name="phone_number" value="{{ form_data.phone_number if form_data else '' }}" maxlength="10" inputmode="numeric" pattern="\d{10}" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Email (Optional)</label>
+                <input type="email" class="form-control js-lowercase" name="email" value="{{ form_data.email if form_data else '' }}">
             </div>
             <div class="col-md-6">
                 <label class="form-label">Constituency</label>
-                <input type="text" class="form-control" name="constituency" value="{{ form_data.constituency if form_data else '' }}" required>
+                <input type="text" class="form-control js-uppercase" name="constituency" value="{{ form_data.constituency if form_data else '' }}" required>
             </div>
             <div class="col-12">
                 <label class="form-label">Address</label>
-                <textarea class="form-control" name="address" rows="3" required>{{ form_data.address if form_data else '' }}</textarea>
+                <textarea class="form-control js-uppercase" name="address" rows="3" required>{{ form_data.address if form_data else '' }}</textarea>
             </div>
             <div class="col-md-6">
                 <label class="form-label">Password</label>
-                <input type="password" class="form-control" name="password" value="{{ form_data.password if form_data else '' }}" required>
-                <div class="form-text">Use 8+ characters with uppercase, lowercase, number, and special symbol.</div>
+                <div class="input-group">
+                    <input type="password" class="form-control js-password-field" name="password" value="{{ form_data.password if form_data else '' }}" minlength="6" required>
+                    <button class="btn btn-outline-secondary js-password-toggle" type="button">Show</button>
+                </div>
+                <div class="form-text">Password must be at least 6 characters long.</div>
             </div>
             <div class="col-md-6">
                 <label class="form-label">Confirm Password</label>
-                <input type="password" class="form-control" name="confirm_password" value="{{ form_data.confirm_password if form_data else '' }}" required>
+                <div class="input-group">
+                    <input type="password" class="form-control js-password-field" name="confirm_password" value="{{ form_data.confirm_password if form_data else '' }}" minlength="6" required>
+                    <button class="btn btn-outline-secondary js-password-toggle" type="button">Show</button>
+                </div>
             </div>
-            <div class="col-12">
-                <button type="submit" class="btn btn-dark btn-lg">Register Voter</button>
+            <div class="col-md-6">
+                <label class="form-label">OTP</label>
+                <input type="text" class="form-control" name="otp" value="{{ form_data.otp if form_data else '' }}" maxlength="6" inputmode="numeric" pattern="\d{6}">
+                <div class="form-text">Click "Send OTP" to generate a simulated 6-digit OTP.</div>
+            </div>
+            <div class="col-12 d-flex flex-wrap gap-2">
+                <button type="submit" name="action" value="send_otp" class="btn btn-outline-primary btn-lg">Send OTP</button>
+                <button type="submit" name="action" value="register" class="btn btn-dark btn-lg">Register Voter</button>
             </div>
         </form>
     </div>

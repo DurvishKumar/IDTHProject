@@ -3,8 +3,8 @@ import os
 import random
 import re
 import sqlite3
-import string
 import tempfile
+import uuid
 from datetime import date, datetime
 from functools import wraps
 from hashlib import sha256
@@ -105,6 +105,18 @@ def init_db():
         )
         """
     )
+
+    existing_columns = {
+        column_info["name"] for column_info in cursor.execute("PRAGMA table_info(voters)").fetchall()
+    }
+    if "full_name" not in existing_columns:
+        cursor.execute("ALTER TABLE voters ADD COLUMN full_name TEXT")
+    if "phone_number" not in existing_columns:
+        cursor.execute("ALTER TABLE voters ADD COLUMN phone_number TEXT")
+    if "email" not in existing_columns:
+        cursor.execute("ALTER TABLE voters ADD COLUMN email TEXT")
+    if "hashed_password" not in existing_columns:
+        cursor.execute("ALTER TABLE voters ADD COLUMN hashed_password TEXT")
 
     cursor.execute(
         """
@@ -259,7 +271,7 @@ def tamper_block(block_index):
 def admin_required(view_function):
     @wraps(view_function)
     def wrapper(*args, **kwargs):
-        if not session.get("admin_id"):
+        if "admin_logged_in" not in session:
             flash("Please log in as admin first.", "warning")
             return redirect(url_for("admin_login"))
         return view_function(*args, **kwargs)
@@ -332,24 +344,21 @@ def calculate_results(election_id):
 
 
 def validate_password(password):
-    """Check the password against simple strong-password rules."""
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters long."
-    if not re.search(r"[A-Z]", password):
-        return False, "Password must include at least one uppercase letter."
-    if not re.search(r"[a-z]", password):
-        return False, "Password must include at least one lowercase letter."
-    if not re.search(r"\d", password):
-        return False, "Password must include at least one digit."
-    if not re.search(r"[^A-Za-z0-9]", password):
-        return False, "Password must include at least one special character."
+    """Check the password against the requested minimum rule."""
+    if len(password) < 6:
+        return False, "Password must be at least 6 characters long."
     return True, ""
 
 
-def validate_contact(contact):
+def validate_email(email):
+    if not email:
+        return True
     email_pattern = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-    phone_pattern = r"^\d{10}$"
-    return bool(re.match(email_pattern, contact) or re.match(phone_pattern, contact))
+    return bool(re.match(email_pattern, email))
+
+
+def validate_phone_number(phone_number):
+    return bool(re.fullmatch(r"\d{10}", phone_number))
 
 
 def calculate_age(dob_text):
@@ -362,11 +371,9 @@ def calculate_age(dob_text):
 
 
 def generate_unique_voter_id():
-    """Generate a unique 10-character voter ID using A-Z and 0-9 only."""
-    characters = string.ascii_uppercase + string.digits
-
+    """Generate a UUID voter ID that will not be reused after deletions."""
     while True:
-        voter_id = "".join(random.choices(characters, k=10))
+        voter_id = str(uuid.uuid4())
         connection = get_db_connection()
         existing_voter = connection.execute(
             "SELECT id FROM voters WHERE voter_id = ?",
@@ -376,6 +383,35 @@ def generate_unique_voter_id():
 
         if not existing_voter:
             return voter_id
+
+
+def build_registration_form_data(source=None):
+    data = source or {}
+    return {
+        "full_name": (data.get("full_name") or "").upper(),
+        "dob": data.get("dob", ""),
+        "gender": data.get("gender", ""),
+        "father_name": (data.get("father_name") or "").upper(),
+        "aadhaar": data.get("aadhaar", ""),
+        "confirm_aadhaar": data.get("confirm_aadhaar", ""),
+        "constituency": (data.get("constituency") or "").upper(),
+        "address": (data.get("address") or "").upper(),
+        "phone_number": data.get("phone_number", ""),
+        "email": (data.get("email") or "").lower(),
+        "password": data.get("password", ""),
+        "confirm_password": data.get("confirm_password", ""),
+        "otp": data.get("otp", ""),
+    }
+
+
+def render_register_form(form_data=None, error=None, info=None, otp_sent=False):
+    return render_template(
+        "register.html",
+        form_data=build_registration_form_data(form_data),
+        error=error,
+        info=info,
+        otp_sent=otp_sent,
+    )
 
 
 @app.context_processor
@@ -395,89 +431,63 @@ def home():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        form_data = request.form
-        name = request.form.get("name", "").strip()
+        form_data = build_registration_form_data(request.form)
+        full_name = form_data["full_name"].strip()
         dob = request.form.get("dob", "").strip()
         gender = request.form.get("gender", "").strip()
-        father_name = request.form.get("father_name", "").strip()
+        father_name = form_data["father_name"].strip()
         aadhaar = request.form.get("aadhaar", "").strip()
         confirm_aadhaar = request.form.get("confirm_aadhaar", "").strip()
-        contact = request.form.get("contact", "").strip()
-        address = request.form.get("address", "").strip()
-        constituency = request.form.get("constituency", "").strip()
+        constituency = form_data["constituency"].strip()
+        address = form_data["address"].strip()
+        phone_number = request.form.get("phone_number", "").strip()
+        email = form_data["email"].strip()
         password = request.form.get("password", "")
         confirm_password = request.form.get("confirm_password", "")
+        otp = request.form.get("otp", "").strip()
+        action = request.form.get("action", "register")
 
         if not all(
             [
-                name,
+                full_name,
                 dob,
                 gender,
                 father_name,
                 aadhaar,
                 confirm_aadhaar,
-                contact,
-                address,
                 constituency,
+                address,
+                phone_number,
                 password,
                 confirm_password,
             ]
         ):
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Please fill in every required field.",
-            )
+            return render_register_form(form_data, error="Please fill in every required field.")
 
         try:
             if calculate_age(dob) < 18:
-                return render_template(
-                    "register.html",
-                    form_data=form_data,
-                    error="Voter must be at least 18 years old.",
-                )
+                return render_register_form(form_data, error="Voter must be at least 18 years old.")
         except ValueError:
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Please enter a valid date of birth.",
-            )
+            return render_register_form(form_data, error="Please enter a valid date of birth.")
 
         if not re.fullmatch(r"\d{12}", aadhaar):
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Aadhaar must contain exactly 12 digits.",
-            )
+            return render_register_form(form_data, error="Aadhaar must contain exactly 12 digits.")
 
         if aadhaar != confirm_aadhaar:
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Aadhaar and confirm Aadhaar do not match.",
-            )
+            return render_register_form(form_data, error="Aadhaar and confirm Aadhaar do not match.")
 
-        if not validate_contact(contact):
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Enter a valid email address or 10-digit phone number.",
-            )
+        if not validate_phone_number(phone_number):
+            return render_register_form(form_data, error="Phone number must contain exactly 10 digits.")
+
+        if not validate_email(email):
+            return render_register_form(form_data, error="Please enter a valid email address.")
 
         password_valid, password_message = validate_password(password)
         if not password_valid:
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error=password_message,
-            )
+            return render_register_form(form_data, error=password_message)
 
         if password != confirm_password:
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="Password and confirm password do not match.",
-            )
+            return render_register_form(form_data, error="Password and confirm password do not match.")
 
         hashed_aadhaar = hash_text(aadhaar)
         connection = get_db_connection()
@@ -487,41 +497,71 @@ def register():
         ).fetchone()
         if existing_voter:
             connection.close()
-            return render_template(
-                "register.html",
-                form_data=form_data,
-                error="A voter with this Aadhaar already exists.",
+            return render_register_form(form_data, error="A voter with this Aadhaar already exists.")
+        connection.close()
+
+        if action == "send_otp":
+            generated_otp = str(random.randint(100000, 999999))
+            session["registration_otp"] = generated_otp
+            session["registration_phone"] = phone_number
+            session["registration_form_data"] = form_data
+            return render_register_form(
+                form_data,
+                info=f"Simulated OTP for testing: {generated_otp}",
+                otp_sent=True,
+            )
+
+        session_form_data = session.get("registration_form_data")
+        if not session_form_data or session.get("registration_phone") != phone_number:
+            return render_register_form(form_data, error="Please generate OTP first.")
+
+        if otp != session.get("registration_otp"):
+            return render_register_form(
+                form_data,
+                error="Invalid OTP. Please enter the 6-digit OTP sent to your phone.",
+                otp_sent=True,
             )
 
         voter_id = generate_unique_voter_id()
+        hashed_password = hash_text(password)
+        connection = get_db_connection()
         connection.execute(
             """
             INSERT INTO voters (
                 voter_id, name, dob, gender, father_name, hashed_aadhaar,
-                contact, address, constituency, password_hash, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                contact, address, constituency, password_hash, created_at,
+                full_name, phone_number, email, hashed_password
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 voter_id,
-                name,
+                full_name,
                 dob,
                 gender,
                 father_name,
                 hashed_aadhaar,
-                contact,
+                phone_number,
                 address,
                 constituency,
-                hash_text(password),
+                hashed_password,
                 get_current_ist_time().isoformat(),
+                full_name,
+                phone_number,
+                email or None,
+                hashed_password,
             ),
         )
         connection.commit()
         connection.close()
+        session.pop("registration_otp", None)
+        session.pop("registration_phone", None)
+        session.pop("registration_form_data", None)
 
         flash(f"Registration successful. Your voter ID is {voter_id}", "success")
         return redirect(url_for("voter_login"))
 
-    return render_template("register.html", form_data=None, error=None)
+    session.pop("registration_form_data", None)
+    return render_register_form()
 
 
 @app.route("/voter/login", methods=["GET", "POST"])
@@ -709,6 +749,7 @@ def admin_login():
             return redirect(url_for("admin_login"))
 
         session.clear()
+        session["admin_logged_in"] = True
         session["admin_id"] = admin["admin_id"]
         flash("Admin login successful.", "success")
         return redirect(url_for("admin_dashboard"))
@@ -818,7 +859,14 @@ def admin_voters():
     connection = get_db_connection()
     voters = connection.execute(
         """
-        SELECT voter_id, name, father_name, address, constituency
+        SELECT
+            voter_id,
+            COALESCE(full_name, name) AS full_name,
+            father_name,
+            address,
+            constituency,
+            phone_number,
+            email
         FROM voters
         ORDER BY id DESC
         """
