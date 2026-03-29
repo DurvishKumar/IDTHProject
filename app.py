@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import sqlite3
 import uuid
 from collections import OrderedDict
 from datetime import date, datetime
@@ -11,11 +10,17 @@ from hashlib import sha256
 import pytz
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
+
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DEFAULT_DATABASE_PATH = os.path.join(BASE_DIR, "database.db")
-DATABASE_PATH = os.environ.get("DATABASE_PATH", DEFAULT_DATABASE_PATH)
 BLOCKCHAIN_PATH = os.environ.get("BLOCKCHAIN_PATH", os.path.join(BASE_DIR, "blockchain.json"))
+DATABASE_URL = os.environ.get("DATABASE_URL")
 DATE_TIME_FORMAT = "%Y-%m-%dT%H:%M"
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -32,12 +37,34 @@ def add_header(response):
     return response
 
 
+class PostgresConnection:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, query, params=None):
+        cursor = self._connection.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(query, params or ())
+        return cursor
+
+    def commit(self):
+        self._connection.commit()
+
+    def rollback(self):
+        self._connection.rollback()
+
+    def close(self):
+        self._connection.close()
+
+
 def get_db_connection():
-    """Create a SQLite connection whose rows behave like dictionaries."""
-    db_path = DATABASE_PATH
-    connection = sqlite3.connect(db_path)
-    connection.row_factory = sqlite3.Row
-    return connection
+    """Create a PostgreSQL connection using DATABASE_URL."""
+    if psycopg2 is None or RealDictCursor is None:
+        raise RuntimeError("psycopg2-binary is required. Install dependencies before running the app.")
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is required.")
+
+    connection = psycopg2.connect(DATABASE_URL)
+    return PostgresConnection(connection)
 
 
 def hash_text(value):
@@ -46,57 +73,47 @@ def hash_text(value):
 
 
 def init_db():
-    """Create all tables and seed a default admin account."""
+    """Create all PostgreSQL tables and seed a default admin account."""
     connection = get_db_connection()
-    cursor = connection.cursor()
-
-    cursor.execute(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             admin_id TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL
         )
         """
     )
 
-    cursor.execute(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS voters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            voter_id TEXT UNIQUE NOT NULL,
-            name TEXT NOT NULL,
-            dob TEXT NOT NULL,
-            gender TEXT NOT NULL,
-            father_name TEXT NOT NULL,
-            hashed_aadhaar TEXT UNIQUE NOT NULL,
-            contact TEXT NOT NULL,
-            address TEXT NOT NULL,
-            constituency TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            has_voted INTEGER DEFAULT 0,
+            voter_id TEXT PRIMARY KEY,
+            full_name TEXT,
+            father_name TEXT,
+            dob DATE,
+            address TEXT,
+            constituency TEXT,
+            phone TEXT,
+            email TEXT,
+            hashed_aadhaar TEXT,
+            hashed_password TEXT,
+            gender TEXT,
+            name TEXT,
+            contact TEXT,
+            password_hash TEXT,
+            has_voted BOOLEAN DEFAULT FALSE,
             voted_election_id TEXT,
-            created_at TEXT NOT NULL
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            phone_number TEXT
         )
         """
     )
 
-    existing_columns = {
-        column_info["name"] for column_info in cursor.execute("PRAGMA table_info(voters)").fetchall()
-    }
-    if "full_name" not in existing_columns:
-        cursor.execute("ALTER TABLE voters ADD COLUMN full_name TEXT")
-    if "phone_number" not in existing_columns:
-        cursor.execute("ALTER TABLE voters ADD COLUMN phone_number TEXT")
-    if "email" not in existing_columns:
-        cursor.execute("ALTER TABLE voters ADD COLUMN email TEXT")
-    if "hashed_password" not in existing_columns:
-        cursor.execute("ALTER TABLE voters ADD COLUMN hashed_password TEXT")
-
-    cursor.execute(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS elections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             election_code TEXT UNIQUE NOT NULL,
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
@@ -105,43 +122,34 @@ def init_db():
         """
     )
 
-    cursor.execute(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS candidates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             election_id TEXT DEFAULT 'GENERAL',
             candidate_name TEXT NOT NULL,
             party_name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (election_id) REFERENCES elections (id)
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
 
-    candidate_columns = {
-        column_info["name"] for column_info in cursor.execute("PRAGMA table_info(candidates)").fetchall()
-    }
-    if "election_id" not in candidate_columns:
-        cursor.execute("ALTER TABLE candidates ADD COLUMN election_id TEXT DEFAULT 'GENERAL'")
-
-    cursor.execute("UPDATE candidates SET election_id = 'GENERAL' WHERE election_id IS NULL OR election_id = ''")
-
-    cursor.execute(
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             election_id TEXT,
             candidate_name TEXT,
             votes INTEGER,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
 
-    admin = cursor.execute("SELECT id FROM admins WHERE admin_id = ?", ("admin",)).fetchone()
+    admin = connection.execute("SELECT id FROM admins WHERE admin_id = %s", ("admin",)).fetchone()
     if not admin:
-        cursor.execute(
-            "INSERT INTO admins (admin_id, password_hash) VALUES (?, ?)",
+        connection.execute(
+            "INSERT INTO admins (admin_id, password_hash) VALUES (%s, %s)",
             ("admin", hash_text("Admin@123")),
         )
 
@@ -319,8 +327,26 @@ def get_election_status(election):
 def get_candidates_for_election(election_id):
     connection = get_db_connection()
     candidates = connection.execute(
-        "SELECT * FROM candidates WHERE election_id = ? ORDER BY id ASC",
+        """
+        SELECT id, candidate_name, party_name, election_id
+        FROM candidates
+        WHERE election_id = %s OR election_id = 'GENERAL'
+        ORDER BY id ASC
+        """,
         (election_id,),
+    ).fetchall()
+    connection.close()
+    return candidates
+
+
+def get_all_candidates():
+    connection = get_db_connection()
+    candidates = connection.execute(
+        """
+        SELECT id, candidate_name, party_name, election_id
+        FROM candidates
+        ORDER BY id ASC
+        """
     ).fetchall()
     connection.close()
     return candidates
@@ -344,7 +370,7 @@ def get_stored_results(election_id):
         """
         SELECT candidate_name, votes, timestamp
         FROM results
-        WHERE election_id = ?
+        WHERE election_id = %s
         ORDER BY id ASC
         """,
         (election_id,),
@@ -372,7 +398,7 @@ def persist_results_for_election(election):
         connection.execute(
             """
             INSERT INTO results (election_id, candidate_name, votes)
-            VALUES (?, ?, ?)
+            VALUES (%s, %s, %s)
             """,
             (election_id, candidate_name, blockchain_counts.get(candidate_name, 0)),
         )
@@ -437,7 +463,7 @@ def generate_unique_voter_id():
         voter_id = str(uuid.uuid4())
         connection = get_db_connection()
         existing_voter = connection.execute(
-            "SELECT id FROM voters WHERE voter_id = ?",
+            "SELECT voter_id FROM voters WHERE voter_id = %s",
             (voter_id,),
         ).fetchone()
         connection.close()
@@ -560,44 +586,34 @@ def register():
             return redirect(url_for("register"))
 
         hashed_aadhaar = hash_text(aadhaar)
-        connection = get_db_connection()
-        existing_voter = connection.execute(
-            "SELECT id FROM voters WHERE hashed_aadhaar = ?",
-            (hashed_aadhaar,),
-        ).fetchone()
-        if existing_voter:
-            connection.close()
-            store_register_feedback(form_data, error="A voter with this Aadhaar already exists.")
-            return redirect(url_for("register"))
-        connection.close()
-
         voter_id = generate_unique_voter_id()
         hashed_password = hash_text(password)
         connection = get_db_connection()
         connection.execute(
             """
             INSERT INTO voters (
-                voter_id, name, dob, gender, father_name, hashed_aadhaar,
-                contact, address, constituency, password_hash, created_at,
-                full_name, phone_number, email, hashed_password
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                voter_id, full_name, father_name, dob, address, constituency,
+                phone, email, hashed_aadhaar, hashed_password, gender, name,
+                contact, password_hash, created_at, phone_number
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 voter_id,
                 full_name,
-                dob,
-                gender,
                 father_name,
-                hashed_aadhaar,
-                phone_number,
+                dob,
                 address,
                 constituency,
-                hashed_password,
-                get_current_ist_time().isoformat(),
-                full_name,
                 phone_number,
                 email or None,
+                hashed_aadhaar,
                 hashed_password,
+                gender,
+                full_name,
+                phone_number,
+                hashed_password,
+                get_current_ist_time().isoformat(),
+                phone_number,
             ),
         )
         connection.commit()
@@ -634,7 +650,7 @@ def voter_login():
 
         connection = get_db_connection()
         voter = connection.execute(
-            "SELECT * FROM voters WHERE voter_id = ? AND password_hash = ?",
+            "SELECT * FROM voters WHERE voter_id = %s AND password_hash = %s",
             (voter_id, hash_text(password)),
         ).fetchone()
         connection.close()
@@ -664,7 +680,7 @@ def vote():
 
     connection = get_db_connection()
     voter = connection.execute(
-        "SELECT * FROM voters WHERE voter_id = ?",
+        "SELECT * FROM voters WHERE voter_id = %s",
         (session["voter_id"],),
     ).fetchone()
     connection.close()
@@ -695,11 +711,15 @@ def vote():
 
         connection = get_db_connection()
         voter = connection.execute(
-            "SELECT * FROM voters WHERE voter_id = ?",
+            "SELECT * FROM voters WHERE voter_id = %s",
             (session["voter_id"],),
         ).fetchone()
         candidate = connection.execute(
-            "SELECT * FROM candidates WHERE id = ? AND election_id = ?",
+            """
+            SELECT id, candidate_name, party_name, election_id
+            FROM candidates
+            WHERE id = %s AND (election_id = %s OR election_id = 'GENERAL')
+            """,
             (selected_candidate_id, election["election_code"]),
         ).fetchone()
         connection.close()
@@ -728,7 +748,7 @@ def vote():
 
         connection = get_db_connection()
         connection.execute(
-            "UPDATE voters SET has_voted = 1, voted_election_id = ? WHERE voter_id = ?",
+            "UPDATE voters SET has_voted = TRUE, voted_election_id = %s WHERE voter_id = %s",
             (election["election_code"], voter["voter_id"]),
         )
         connection.commit()
@@ -776,7 +796,7 @@ def admin_login():
 
         connection = get_db_connection()
         admin = connection.execute(
-            "SELECT * FROM admins WHERE admin_id = ? AND password_hash = ?",
+            "SELECT * FROM admins WHERE admin_id = %s AND password_hash = %s",
             (admin_id, hash_text(password)),
         ).fetchone()
         connection.close()
@@ -798,7 +818,7 @@ def admin_login():
 @admin_required
 def admin_dashboard():
     election = get_latest_election()
-    candidates = get_candidates_for_election(election["election_code"]) if election else []
+    candidates = get_all_candidates()
 
     return render_template(
         "admin_dashboard.html",
@@ -834,13 +854,14 @@ def create_election():
         connection.execute(
             """
             INSERT INTO elections (election_code, start_time, end_time, created_at)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
             """,
             (election_code, start_time, end_time, get_current_ist_time().isoformat()),
         )
         connection.commit()
         flash("Election configured successfully.", "success")
-    except sqlite3.IntegrityError:
+    except Exception:
+        connection.rollback()
         flash("Election ID must be unique.", "danger")
     finally:
         connection.close()
@@ -865,7 +886,7 @@ def add_candidate():
     connection.execute(
         """
         INSERT INTO candidates (election_id, candidate_name, party_name, created_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
         """,
         (election_id, candidate_name, party_name, get_current_ist_time().isoformat()),
     )
@@ -880,7 +901,7 @@ def add_candidate():
 @admin_required
 def remove_candidate(candidate_id):
     connection = get_db_connection()
-    connection.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
+    connection.execute("DELETE FROM candidates WHERE id = %s", (candidate_id,))
     connection.commit()
     connection.close()
 
@@ -903,7 +924,7 @@ def admin_voters():
             phone_number,
             email
         FROM voters
-        ORDER BY id DESC
+        ORDER BY created_at DESC NULLS LAST, voter_id DESC
         """
     ).fetchall()
     connection.close()
@@ -913,13 +934,15 @@ def admin_voters():
 @app.route("/admin/delete_voter/<voter_id>", methods=["POST"])
 @admin_required
 def delete_voter(voter_id):
-    db_path = DATABASE_PATH
     print("Deleting voter:", voter_id)
-    print("DB path:", db_path)
-    connection = sqlite3.connect(db_path)
-    cursor = connection.cursor()
-    cursor.execute("DELETE FROM voters WHERE voter_id = ?", (voter_id,))
+    print("DATABASE_URL configured:", bool(DATABASE_URL))
+    connection = get_db_connection()
+    cursor = connection.execute("DELETE FROM voters WHERE voter_id = %s", (voter_id,))
     connection.commit()
+    check_cursor = connection.execute("SELECT voter_id FROM voters WHERE voter_id = %s", (voter_id,))
+    print("CHECK DELETE:", check_cursor.fetchone())
+    cursor.close()
+    check_cursor.close()
     connection.close()
 
     flash("Voter deleted successfully.", "success")
@@ -960,7 +983,8 @@ def voter_logout():
     return redirect(url_for("home"))
 
 
-init_db()
+if psycopg2 is not None and DATABASE_URL:
+    init_db()
 ensure_blockchain()
 
 
